@@ -303,8 +303,14 @@ uint8_t HiveConfig::arrowBridgeTimestampUnit(
   return session->get<uint8_t>(kArrowBridgeTimestampUnit, 9 /* nano */);
 }
 
+// The ParquetDictionaryFilter reads DictionaryPage during query
+// execution, which leads to read amplification in TPC-DS benchmark scenarios.
+// It is disabled by default, and is only recommended to be enabled manually
+// when the dictionary can provide a high filtering rate (i.e., the filter can
+// significantly reduce the amount of data that needs to be processed
+// subsequently)
 bool HiveConfig::isDictionaryFilterEnabled() const {
-  return config_->get<bool>(kParquetDictionaryFilterEnabled, true);
+  return config_->get<bool>(kParquetDictionaryFilterEnabled, false);
 }
 
 int32_t HiveConfig::decodeRepDefPageCount() const {

@@ -161,7 +161,7 @@ class RowReaderOptions {
   /// dictionaries
   /// against query filters. This can significantly improve performance for
   /// selective queries. Defaults to true.
-  bool enableDictionaryFilter_ = true;
+  bool enableDictionaryFilter_ = false;
 
   int32_t decodeRepDefPageCount_{10};
   int32_t parquetRepDefMemoryLimit_{16UL << 20};
