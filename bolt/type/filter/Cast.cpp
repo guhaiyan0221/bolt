@@ -458,7 +458,7 @@ bool Cast<SOURCE, TARGET>::testBytesRange(
 }
 
 template <TypeKind SOURCE, TypeKind TARGET>
-bool Cast<SOURCE, TARGET>::testTimestamp(Timestamp timestamp) const {
+bool Cast<SOURCE, TARGET>::testTimestamp(const Timestamp& timestamp) const {
   // First check the non-cast filter if we have one
   if (mergedNonCastFilter_ && !mergedNonCastFilter_->testTimestamp(timestamp)) {
     return false;

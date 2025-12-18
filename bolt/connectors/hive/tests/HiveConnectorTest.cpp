@@ -428,8 +428,7 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
 
   auto expr = parseExpr("not (c0 > 0 or c1 > 0)", rowType);
   SubfieldFilters filters;
-  auto remaining = HiveDataSource::extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters);
+  auto remaining = extractFiltersFromRemainingFilter(expr, &evaluator, filters);
   ASSERT_FALSE(remaining);
   ASSERT_EQ(filters.size(), 2);
   ASSERT_GT(filters.count(Subfield("c0")), 0);
@@ -437,8 +436,7 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
 
   expr = parseExpr("not (c0 > 0 or c1 > c0)", rowType);
   filters.clear();
-  remaining = HiveDataSource::extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters);
+  remaining = extractFiltersFromRemainingFilter(expr, &evaluator, filters);
   ASSERT_EQ(filters.size(), 1);
   ASSERT_GT(filters.count(Subfield("c0")), 0);
   ASSERT_TRUE(remaining);
@@ -447,8 +445,7 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   expr = parseExpr(
       "not (c2 > 1::decimal(20, 0) or c2 < 0::decimal(20, 0))", rowType);
   filters.clear();
-  remaining = HiveDataSource::extractFiltersFromRemainingFilter(
-      expr, &evaluator, false, filters);
+  remaining = extractFiltersFromRemainingFilter(expr, &evaluator, filters);
   ASSERT_GT(filters.count(Subfield("c2")), 0);
   // Change these once HUGEINT filter merge is fixed.
   ASSERT_TRUE(remaining);

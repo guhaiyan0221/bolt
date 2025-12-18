@@ -205,9 +205,7 @@ class TimestampColumnReader : public IntegerColumnReader {
         }
       }
       auto newMultiRange = common::MultiRange(
-          std::move(filters),
-          multiRange->nullAllowed(),
-          multiRange->nanAllowed());
+          std::move(filters), multiRange->nullAllowed(), false);
       this->readWithVisitor(
           rows,
           dwio::common::ColumnVisitor<

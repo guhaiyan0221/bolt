@@ -108,14 +108,6 @@ class HiveDataSource : public DataSource {
 
   int64_t estimatedRowSize() override;
 
-  // Internal API, made public to be accessible in unit tests.  Do not use in
-  // other places.
-  static core::TypedExprPtr extractFiltersFromRemainingFilter(
-      const core::TypedExprPtr& expr,
-      core::ExpressionEvaluator* evaluator,
-      bool negated,
-      SubfieldFilters& filters);
-
   std::unique_ptr<SplitReader> createConfiguredSplitReader(
       const std::shared_ptr<HiveConnectorSplit>& split,
       const bool isPartOfPaimonSplit);

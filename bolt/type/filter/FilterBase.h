@@ -33,8 +33,10 @@
 #include "bolt/common/serialization/Serializable.h"
 #include "bolt/common/token/ITokenExtractor.h"
 #include "bolt/type/StringView.h"
+#include "bolt/type/Subfield.h"
 #include "bolt/type/Type.h"
 #include "bolt/type/filter/FilterUtil.h"
+
 namespace bytedance::bolt::common {
 
 enum class FilterKind {
@@ -78,6 +80,7 @@ enum class FilterKind {
 
 class Filter;
 using FilterPtr = std::unique_ptr<Filter>;
+using SubfieldFilters = std::unordered_map<Subfield, FilterPtr>;
 
 class IFilterWithInnerFilter {
  public:
@@ -250,7 +253,11 @@ class Filter : public bolt::ISerializable {
     BOLT_UNSUPPORTED("{}: testBytes() is not supported.", toString());
   }
 
-  virtual bool testTimestamp(Timestamp /* unused */) const {
+  virtual bool testStringView(const StringView& view) const {
+    return testBytes(view.data(), view.size());
+  }
+
+  virtual bool testTimestamp(const Timestamp& /* unused */) const {
     BOLT_UNSUPPORTED("{}: testTimestamp() is not supported.", toString());
   }
 
@@ -288,8 +295,10 @@ class Filter : public bolt::ISerializable {
     BOLT_UNSUPPORTED("{}: testInt64Range() is not supported.", toString());
   }
 
-  virtual bool
-  testInt128Range(int128_t /*min*/, int128_t /*max*/, bool /*hasNull*/) const {
+  virtual bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const {
     BOLT_UNSUPPORTED("{}: testInt128Range() is not supported.", toString());
   }
 
@@ -385,6 +394,17 @@ class AlwaysFalse final : public Filter {
     return false;
   }
 
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const final {
+    return false;
+  }
+
+  bool testInt128(const int128_t& /* unused */) const final {
+    return false;
+  }
+
   bool testDouble(double /* unused */) const final {
     return false;
   }
@@ -470,6 +490,13 @@ class AlwaysTrue final : public Filter {
 
   bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/)
       const final {
+    return true;
+  }
+
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const final {
     return true;
   }
 
@@ -570,8 +597,19 @@ class IsNull final : public Filter {
     return false;
   }
 
+  bool testInt128(const int128_t& /* unused */) const final {
+    return false;
+  }
+
   bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool hasNull)
       const final {
+    return hasNull;
+  }
+
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool hasNull) const final {
     return hasNull;
   }
 
@@ -596,7 +634,7 @@ class IsNull final : public Filter {
     return false;
   }
 
-  bool testTimestamp(Timestamp /* unused */) const final {
+  bool testTimestamp(const Timestamp& /* unused */) const final {
     return false;
   }
 
@@ -658,6 +696,13 @@ class IsNotNull final : public Filter {
     return true;
   }
 
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const final {
+    return true;
+  }
+
   bool testDoubleRange(double /*min*/, double /*max*/, bool /*hasNull*/)
       const final {
     return true;
@@ -679,7 +724,7 @@ class IsNotNull final : public Filter {
     return true;
   }
 
-  bool testTimestamp(Timestamp /* unused */) const final {
+  bool testTimestamp(const Timestamp& /* unused */) const final {
     return true;
   }
 
@@ -776,7 +821,13 @@ class BigintRange final : public Filter {
         upper32_(std::min<int64_t>(upper, std::numeric_limits<int32_t>::max())),
         lower16_(std::max<int64_t>(lower, std::numeric_limits<int16_t>::min())),
         upper16_(std::min<int64_t>(upper, std::numeric_limits<int16_t>::max())),
-        isSingleValue_(upper_ == lower_) {}
+        isSingleValue_(upper_ == lower_),
+        inInt32Range_(
+            lower <= std::numeric_limits<int32_t>::max() &&
+            upper >= std::numeric_limits<int32_t>::min()),
+        inInt16Range_(
+            lower <= std::numeric_limits<int16_t>::max() &&
+            upper >= std::numeric_limits<int16_t>::min()) {}
 
   folly::dynamic serialize() const override;
 
@@ -807,6 +858,9 @@ class BigintRange final : public Filter {
 
   xsimd::batch_bool<int32_t> testValues(
       xsimd::batch<int32_t> values) const final {
+    if (!inInt32Range_) {
+      return xsimd::batch_bool<int32_t>(false);
+    }
     if (isSingleValue_) {
       if (UNLIKELY(lower32_ != lower_)) {
         return xsimd::batch_bool<int32_t>(false);
@@ -819,6 +873,9 @@ class BigintRange final : public Filter {
 
   xsimd::batch_bool<int16_t> testValues(
       xsimd::batch<int16_t> values) const final {
+    if (!inInt16Range_) {
+      return xsimd::batch_bool<int16_t>(false);
+    }
     if (isSingleValue_) {
       if (UNLIKELY(lower16_ != lower_)) {
         return xsimd::batch_bool<int16_t>(false);
@@ -869,6 +926,8 @@ class BigintRange final : public Filter {
   const int16_t lower16_;
   const int16_t upper16_;
   const bool isSingleValue_;
+  const bool inInt32Range_;
+  const bool inInt16Range_;
 };
 
 class NegatedBigintRange final : public Filter {
@@ -968,7 +1027,8 @@ class HugeintRange final : public Filter {
     return value >= lower_ && value <= upper_;
   }
 
-  bool testInt128Range(int128_t min, int128_t max, bool hasNull) const final {
+  bool testInt128Range(const int128_t& min, const int128_t& max, bool hasNull)
+      const final {
     if (hasNull && nullAllowed_) {
       return true;
     }
@@ -1028,7 +1088,8 @@ class NegatedHugeintRange final : public Filter {
     return !nonNegated_->testInt128(value);
   }
 
-  bool testInt128Range(int128_t min, int128_t max, bool hasNull) const final {
+  bool testInt128Range(const int128_t& min, const int128_t& max, bool hasNull)
+      const final {
     if (hasNull && nullAllowed_) {
       return true;
     }
@@ -1179,6 +1240,14 @@ class HugeintValuesUsingHashTable final : public Filter,
     return false;
   }
 
+  int128_t min() const {
+    return min_;
+  }
+
+  int128_t max() const {
+    return max_;
+  }
+
  private:
   const int128_t min_;
   const int128_t max_;
@@ -1226,6 +1295,14 @@ class BigintValuesUsingBitmask final : public Filter,
   bool testingEquals(const Filter& other) const override;
   bool isNegateFilter() const final {
     return false;
+  }
+
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
   }
 
  private:
@@ -1379,6 +1456,14 @@ class NegatedBigintValuesUsingBitmask final
 
   bool testingEquals(const Filter& other) const final;
 
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
+  }
+
  private:
   std::unique_ptr<Filter>
   mergeWith(int64_t min, int64_t max, const Filter* other) const;
@@ -1475,45 +1560,155 @@ class BytesRange final : public AbstractRange {
   /// the filter.
   /// @param nullAllowed Null values are passing the filter if true.
   BytesRange(
-      const std::string& lower,
+      std::string lower,
       bool lowerUnbounded,
       bool lowerExclusive,
-      const std::string& upper,
+      std::string upper,
       bool upperUnbounded,
       bool upperExclusive,
-      bool nullAllowed);
+      bool nullAllowed)
+      : AbstractRange(
+            lowerUnbounded,
+            lowerExclusive,
+            upperUnbounded,
+            upperExclusive,
+            nullAllowed,
+            FilterKind::kBytesRange),
+        lower_(std::move(lower)),
+        upper_(std::move(upper)),
+        lowerView_(lower_),
+        upperView_(upper_),
+        singleValue_(
+            !lowerExclusive_ && !upperExclusive_ && !lowerUnbounded_ &&
+            !upperUnbounded_ && lower_ == upper_) {
+    // Always-true filters should be specified using AlwaysTrue.
+    BOLT_CHECK(!lowerUnbounded_ || !upperUnbounded_);
+  }
 
-  BytesRange(const BytesRange& other, bool nullAllowed);
+  BytesRange(const BytesRange& other, bool nullAllowed)
+      : AbstractRange(
+            other.lowerUnbounded_,
+            other.lowerExclusive_,
+            other.upperUnbounded_,
+            other.upperExclusive_,
+            nullAllowed,
+            FilterKind::kBytesRange),
+        lower_(other.lower_),
+        upper_(other.upper_),
+        lowerView_(lower_),
+        upperView_(upper_),
+        singleValue_(other.singleValue_) {}
 
   folly::dynamic serialize() const override;
-  static FilterPtr create(const folly::dynamic& obj);
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
   std::unique_ptr<Filter> clone(
-      std::optional<bool> nullAllowed = std::nullopt) const final;
-  std::string toString() const final;
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BytesRange>(*this, nullAllowed.value());
+    } else {
+      return std::make_unique<BytesRange>(*this);
+    }
+  }
+
+  std::string toString() const override {
+    return fmt::format(
+        "BytesRange: {}{}, {}{} {}",
+        (lowerUnbounded_ || lowerExclusive_) ? "(" : "[",
+        lowerUnbounded_ ? "..." : lower_,
+        upperUnbounded_ ? "..." : upper_,
+        (upperUnbounded_ || upperExclusive_) ? ")" : "]",
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
   bool testBytes(const char* value, int32_t length) const final;
+
+  bool testStringView(const StringView& view) const final {
+    if (singleValue_) {
+      return view == lowerView_;
+    }
+    if (!lowerUnbounded_) {
+      if (lowerExclusive_) {
+        if (view <= lowerView_) {
+          return false;
+        }
+      } else {
+        if (view < lowerView_) {
+          return false;
+        }
+      }
+    }
+    if (!upperUnbounded_) {
+      if (upperExclusive_) {
+        if (view >= upperView_) {
+          return false;
+        }
+      } else {
+        if (view > upperView_) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   bool testBytesRange(
       std::optional<std::string_view> min,
       std::optional<std::string_view> max,
       bool hasNull) const final;
-  bool hasTestLength() const final;
-  bool testLength(int length) const final;
-  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
-  xsimd::batch_bool<int32_t> testLengths(
-      xsimd::batch<int32_t> lengths) const final;
 
-  bool isSingleValue() const;
-  bool isUpperUnbounded() const;
-  bool isLowerUnbounded() const;
-  const std::string& lower() const;
-  const std::string& upper() const;
+  bool hasTestLength() const final {
+    return true;
+  }
+
+  bool testLength(int length) const final {
+    return !singleValue_ || static_cast<int64_t>(lower_.size()) == length;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  xsimd::batch_bool<int32_t> testLengths(
+      xsimd::batch<int32_t> lengths) const final {
+    BOLT_DCHECK(singleValue_);
+    return lengths == xsimd::broadcast<int32_t>(lower_.size());
+  }
+
+  bool isSingleValue() const {
+    return singleValue_;
+  }
+
+  bool isUpperUnbounded() const {
+    return upperUnbounded_;
+  }
+
+  bool isLowerUnbounded() const {
+    return lowerUnbounded_;
+  }
+
+  bool isUpperExclusive() const {
+    return upperExclusive_;
+  }
+
+  bool isLowerExclusive() const {
+    return lowerExclusive_;
+  }
+
+  const std::string& lower() const {
+    return lower_;
+  }
+
+  const std::string& upper() const {
+    return upper_;
+  }
 
   bool testingEquals(const Filter& other) const final;
-  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
-  bool testInt64(int64_t value) const final;
 
  private:
   const std::string lower_;
   const std::string upper_;
+  const StringView lowerView_;
+  const StringView upperView_;
   const bool singleValue_;
 };
 
@@ -1570,6 +1765,10 @@ class NegatedBytesRange final : public Filter {
 
   bool testBytes(const char* value, int32_t length) const final {
     return !nonNegated_->testBytes(value, length);
+  }
+
+  bool testStringView(const StringView& view) const final {
+    return !nonNegated_->testStringView(view);
   }
 
   bool testBytesRange(
@@ -1662,7 +1861,7 @@ class TimestampRange : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool testTimestamp(Timestamp value) const override {
+  bool testTimestamp(const Timestamp& value) const override {
     return value >= lower_ && value <= upper_;
   }
 
@@ -1720,7 +1919,7 @@ class NegatedTimestampRange final : public Filter {
       std::optional<bool> nullAllowed = std::nullopt) const final;
 
   bool testInt128(const int128_t& value) const final;
-  bool testTimestamp(Timestamp value) const final;
+  bool testTimestamp(const Timestamp& value) const final;
   bool testTimestampRange(Timestamp min, Timestamp max, bool hasNull)
       const final;
 
@@ -1866,41 +2065,53 @@ class MultiRange final : public Filter {
   /// All entries must support the same data types.
   /// @param nullAllowed Null values are passing the filter if true. nullAllowed
   /// flags in the 'ranges' filters are ignored.
-  /// @param nanAllowed Not-a-Number floating point values are passing the
-  /// filter if true. Applies to floating point data types only. NaN values are
-  /// not further tested using contained filters.
+  /// TODO: remove redundant param `nanAllowed` after presto removes the use of
+  /// this param. For now, we set a default value to avoid breaking presto.
   MultiRange(
       std::vector<std::unique_ptr<Filter>> filters,
       bool nullAllowed,
-      bool nanAllowed);
+      bool nanAllowed = false)
+      : Filter(true, nullAllowed, FilterKind::kMultiRange),
+        filters_(std::move(filters)) {}
 
   folly::dynamic serialize() const override;
-  static FilterPtr create(const folly::dynamic& obj);
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
 
   bool testDouble(double value) const final;
+
   bool testFloat(float value) const final;
+
+  bool testInt128(const int128_t& value) const final;
+
   bool testBytes(const char* value, int32_t length) const final;
-  bool testTimestamp(Timestamp value) const final;
+
+  bool testTimestamp(const Timestamp& value) const final;
+
   bool hasTestLength() const final;
+
   bool testLength(int32_t length) const final;
+
   bool testBytesRange(
       std::optional<std::string_view> min,
       std::optional<std::string_view> max,
       bool hasNull) const final;
-  bool testDoubleRange(double min, double max, bool hasNull) const final;
-  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
-  bool testInt64(int64_t value) const final;
 
-  const std::vector<std::unique_ptr<Filter>>& filters() const;
-  bool nanAllowed() const;
-  std::unique_ptr<Filter> mergeWith(const Filter* other) const override final;
+  bool testDoubleRange(double min, double max, bool hasNull) const final;
+
+  const std::vector<std::unique_ptr<Filter>>& filters() const {
+    return filters_;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
   bool testingEquals(const Filter& other) const final;
 
  private:
   const std::vector<std::unique_ptr<Filter>> filters_;
-  const bool nanAllowed_;
 };
 
 class Like final : public Filter {

@@ -39,6 +39,9 @@
 #include "bolt/dwio/common/CachedBufferedInput.h"
 #include "bolt/dwio/common/DirectBufferedInput.h"
 #include "bolt/dwio/common/Reader.h"
+#include "bolt/expression/Expr.h"
+#include "bolt/expression/ExprToSubfieldFilter.h"
+
 namespace bytedance::bolt::connector::hive {
 
 namespace {
@@ -554,6 +557,7 @@ void configureRowReaderOptions(
   }
 }
 
+namespace {
 bool applyPartitionFilter(
     TypeKind kind,
     const std::string& partitionValue,
@@ -588,6 +592,7 @@ bool applyPartitionFilter(
         ex.what());
   }
 }
+} // namespace
 
 bool isHiveNull(const std::string& source) {
   return (source.size() == 2 && source.compare("\\N") == 0);
@@ -688,6 +693,113 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
       executor,
       readerOpts,
       connectorQueryCtx->asyncThreadCtx());
+}
+
+namespace {
+
+core::CallTypedExprPtr replaceInputs(
+    const core::CallTypedExpr* call,
+    std::vector<core::TypedExprPtr>&& inputs) {
+  return std::make_shared<core::CallTypedExpr>(
+      call->type(), std::move(inputs), call->name());
+}
+
+bool endWith(const std::string& str, const char* suffix) {
+  int len = strlen(suffix);
+  if (str.size() < len) {
+    return false;
+  }
+  for (int i = 0, j = str.size() - len; i < len; ++i, ++j) {
+    if (str[j] != suffix[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isNotExpr(
+    const core::TypedExprPtr& expr,
+    const core::CallTypedExpr* call,
+    core::ExpressionEvaluator* evaluator) {
+  if (!endWith(call->name(), "not")) {
+    return false;
+  }
+  auto exprs = evaluator->compile(expr);
+  BOLT_CHECK_EQ(exprs->size(), 1);
+  auto& compiled = exprs->expr(0);
+  return compiled->vectorFunction() &&
+      compiled->vectorFunction()->getCanonicalName() ==
+      exec::FunctionCanonicalName::kNot;
+}
+
+core::TypedExprPtr extractFiltersFromRemainingFilter(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    bool negated,
+    common::SubfieldFilters& filters) {
+  auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
+  if (call == nullptr) {
+    return expr;
+  }
+  common::Filter* oldFilter = nullptr;
+  try {
+    if (auto subfieldAndFilter =
+            exec::ExprToSubfieldFilterParser::getInstance()
+                ->leafCallToSubfieldFilter(*call, evaluator, negated)) {
+      auto& [subfield, filter] = subfieldAndFilter.value();
+      if (auto it = filters.find(subfield); it != filters.end()) {
+        oldFilter = it->second.get();
+        filter = filter->mergeWith(oldFilter);
+      }
+      filters.insert_or_assign(std::move(subfield), std::move(filter));
+      return nullptr;
+    }
+  } catch (const BoltException&) {
+    LOG(WARNING) << "Unexpected failure when extracting filter for: "
+                 << expr->toString();
+    if (oldFilter) {
+      LOG(WARNING) << "Merging with " << oldFilter->toString();
+    }
+  }
+
+  if (isNotExpr(expr, call, evaluator)) {
+    auto inner = extractFiltersFromRemainingFilter(
+        call->inputs()[0], evaluator, !negated, filters);
+    return inner ? replaceInputs(call, {inner}) : nullptr;
+  }
+
+  if ((call->name() == "and" && !negated) ||
+      (call->name() == "or" && negated)) {
+    std::vector<core::TypedExprPtr> args;
+    args.reserve(call->inputs().size());
+    for (const auto& input : call->inputs()) {
+      if (auto arg = extractFiltersFromRemainingFilter(
+              input, evaluator, negated, filters)) {
+        args.push_back(std::move(arg));
+      }
+      // If extractFiltersFromRemainingFilter returns nullptr, it means
+      // everything in input is converted to filters.
+    }
+    if (args.empty()) {
+      return nullptr;
+    }
+    if (args.size() == 1) {
+      return std::move(args[0]);
+    }
+    return replaceInputs(call, std::move(args));
+  }
+
+  return expr;
+}
+
+} // namespace
+
+core::TypedExprPtr extractFiltersFromRemainingFilter(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    common::SubfieldFilters& filters) {
+  return extractFiltersFromRemainingFilter(
+      expr, evaluator, /*negated=*/false, filters);
 }
 
 } // namespace bytedance::bolt::connector::hive

@@ -143,6 +143,10 @@ class VectorFunction {
     return std::nullopt;
   }
 
+  virtual FunctionCanonicalName getCanonicalName() const {
+    return FunctionCanonicalName::kUnknown;
+  }
+
   // indicate NOT function
   virtual bool isNegated() const {
     return false;

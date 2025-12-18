@@ -44,7 +44,6 @@
 #include "bolt/connectors/hive/SplitReader.h"
 #include "bolt/dwio/common/ReaderFactory.h"
 #include "bolt/dwio/common/exception/Exception.h"
-#include "bolt/expression/ExprToSubfieldFilter.h"
 #include "bolt/expression/FieldReference.h"
 namespace bytedance::bolt::connector::hive {
 
@@ -52,13 +51,6 @@ class HiveTableHandle;
 class HiveColumnHandle;
 
 namespace {
-
-core::CallTypedExprPtr replaceInputs(
-    const core::CallTypedExpr* call,
-    std::vector<core::TypedExprPtr>&& inputs) {
-  return std::make_shared<core::CallTypedExpr>(
-      call->type(), std::move(inputs), call->name());
-}
 
 int64_t extractAttemptNumber(const std::string& taskId) {
   const std::string prefix = "ATTEMPT_";
@@ -107,87 +99,6 @@ void enrichExceptionSetFromConf(
 #endif
 
 } // namespace
-
-core::TypedExprPtr HiveDataSource::extractFiltersFromRemainingFilter(
-    const core::TypedExprPtr& expr,
-    core::ExpressionEvaluator* evaluator,
-    bool negated,
-    SubfieldFilters& filters) {
-  auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
-  static const char* kLike = "presto.default.like";
-
-  if (!call || call->name() == "like" || call->name() == kLike) {
-    return expr;
-  }
-
-  // Handle logical operations
-  if (call->name() == "not") {
-    auto inner = extractFiltersFromRemainingFilter(
-        call->inputs()[0], evaluator, !negated, filters);
-    return inner ? replaceInputs(call, {inner}) : nullptr;
-  }
-
-  if ((call->name() == "and" && !negated) ||
-      (call->name() == "or" && negated)) {
-    auto lhs = extractFiltersFromRemainingFilter(
-        call->inputs()[0], evaluator, negated, filters);
-    auto rhs = extractFiltersFromRemainingFilter(
-        call->inputs()[1], evaluator, negated, filters);
-    if (!lhs) {
-      return rhs;
-    }
-    if (!rhs) {
-      return lhs;
-    }
-    return replaceInputs(call, {lhs, rhs});
-  }
-
-  // Try to extract and possibly merge filters
-  try {
-    common::Subfield subfield;
-    auto filter =
-        exec::leafCallToSubfieldFilter(*call, subfield, evaluator, negated);
-
-    // Pass the expression to remainingFilterExprSet_ if:
-    // 1. No filter could be created from this expression.
-    // 2. We get a Cast filter. Cast filter currently does not 100% align with
-    // CastExpr.
-    //    We may need to do the filter check twice.
-    // TODO: Improve the cast filter to make it identical to CastExpr.
-    if (!filter || filter->kind() == common::FilterKind::kCast ||
-        filter->kind() == common::FilterKind::kMapSubscript) {
-      return expr;
-    }
-
-    // Check if we already have a filter for this subfield
-    if (auto it = filters.find(subfield); it != filters.end()) {
-      auto& existingFilter = it->second;
-
-      // Try to merge the new filter with the existing one
-      auto mergedFilter = filter->mergeWith(existingFilter.get());
-
-      if (mergedFilter) {
-        // Use the merged filter
-        filters.insert_or_assign(std::move(subfield), std::move(mergedFilter));
-      }
-      // If merging failed, keep the existing filter
-      // (no need to update filters map)
-    } else {
-      // Insert the new filter
-      filters.emplace(std::move(subfield), std::move(filter));
-    }
-
-    // This expression is now fully represented by filters
-    return nullptr;
-
-  } catch (const BoltException& e) {
-    LOG(WARNING) << "Unexpected failure when extracting filter for: "
-                 << expr->toString() << ": " << e.what();
-  }
-
-  // Return the original expression if we couldn't extract a filter
-  return expr;
-}
 
 HiveDataSource::HiveDataSource(
     const RowTypePtr& outputType,
@@ -290,10 +201,7 @@ HiveDataSource::HiveDataSource(
   auto remainingFilter = hiveTableHandle_->remainingFilter();
   if (hiveTableHandle_->isFilterPushdownEnabled()) {
     remainingFilter = extractFiltersFromRemainingFilter(
-        hiveTableHandle_->remainingFilter(),
-        expressionEvaluator_,
-        false,
-        filters);
+        hiveTableHandle_->remainingFilter(), expressionEvaluator_, filters);
   }
 
   std::vector<common::Subfield> remainingFilterSubfields;
@@ -818,7 +726,6 @@ std::optional<RowVectorPtr> HiveDataSource::next(
   // TODO Check if remaining filter has a conjunct that doesn't depend on
   // any column, e.g. rand() < 0.1. Evaluate that conjunct first, then scan
   // only rows that passed.
-
   uint64_t rowsScanned = 0;
 #ifdef BOLT_ENABLE_HDFS3
   if (UNLIKELY(ignoreCorruptFiles_)) {

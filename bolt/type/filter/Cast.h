@@ -51,7 +51,7 @@ class Cast final : public Filter, public IFilterWithInnerFilter {
 
   bool testBool(bool value) const override;
   bool testBytes(const char* bytes, int32_t len) const override;
-  bool testTimestamp(Timestamp timestamp) const override;
+  bool testTimestamp(const Timestamp& timestamp) const override;
   bool testBytesRange(
       std::optional<std::string_view> min,
       std::optional<std::string_view> max,

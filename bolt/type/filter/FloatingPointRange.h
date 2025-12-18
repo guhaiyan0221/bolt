@@ -23,18 +23,24 @@
 #include "bolt/type/Timestamp.h"
 #include "bolt/type/filter/FilterBase.h"
 namespace bytedance::bolt::common {
-
 /// Range filter for floating point data types. Supports open, closed and
 /// unbounded ranges, e.g. c >= 10.3, c > 10.3, c <= 34.8, c < 34.8, c >= 10.3
 /// AND c < 34.8, c BETWEEN 10.3 and 34.8.
 /// @tparam T Floating point type: float or double.
 template <typename T>
 class FloatingPointRange final : public AbstractRange {
-  static_assert(
-      std::is_same_v<T, float> || std::is_same_v<T, double>,
-      "T must be float or double");
-
  public:
+  /// @param lower Lower end of the range.
+  /// @param lowerUnbounded True if lower end is negative infinity in which case
+  /// the value of lower is ignored.
+  /// @param lowerExclusive True if open range, e.g. lower value doesn't pass
+  /// the filter.
+  /// @param upper Upper end of the range.
+  /// @param upperUnbounded True if upper end is positive infinity in which case
+  /// the value of upper is ignored.
+  /// @param upperExclusive True if open range, e.g. upper value doesn't pass
+  /// the filter.
+  /// @param nullAllowed Null values are passing the filter if true.
   FloatingPointRange(
       T lower,
       bool lowerUnbounded,
@@ -42,51 +48,207 @@ class FloatingPointRange final : public AbstractRange {
       T upper,
       bool upperUnbounded,
       bool upperExclusive,
-      bool nullAllowed);
+      bool nullAllowed)
+      : AbstractRange(
+            lowerUnbounded,
+            lowerExclusive,
+            upperUnbounded,
+            upperExclusive,
+            nullAllowed,
+            (std::is_same_v<T, double>) ? FilterKind::kDoubleRange
+                                        : FilterKind::kFloatRange),
+        lower_(lower),
+        upper_(upper) {
+    BOLT_CHECK(lowerUnbounded || !std::isnan(lower_));
+    BOLT_CHECK(upperUnbounded || !std::isnan(upper_));
+  }
 
-  FloatingPointRange(const FloatingPointRange& other, bool nullAllowed);
+  FloatingPointRange(const FloatingPointRange& other, bool nullAllowed)
+      : AbstractRange(
+            other.lowerUnbounded_,
+            other.lowerExclusive_,
+            other.upperUnbounded_,
+            other.upperExclusive_,
+            nullAllowed,
+            (std::is_same_v<T, double>) ? FilterKind::kDoubleRange
+                                        : FilterKind::kFloatRange),
+        lower_(other.lower_),
+        upper_(other.upper_) {
+    BOLT_CHECK(lowerUnbounded_ || !std::isnan(lower_));
+    BOLT_CHECK(upperUnbounded_ || !std::isnan(upper_));
+  }
 
-  // Core interface methods
+  folly::dynamic serialize() const override;
+
   double lower() const {
     return lower_;
   }
+
   double upper() const {
     return upper_;
   }
 
-  // Virtual interface implementation
-  folly::dynamic serialize() const override;
   std::unique_ptr<Filter> clone(
-      std::optional<bool> nullAllowed = std::nullopt) const final;
-  bool testDouble(double value) const final;
-  bool testFloat(float value) const final;
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<FloatingPointRange<T>>(
+          *this, nullAllowed.value());
+    } else {
+      return std::make_unique<FloatingPointRange<T>>(*this);
+    }
+  }
 
-  xsimd::batch_bool<double> testValues(xsimd::batch<double> values) const final;
-  xsimd::batch_bool<float> testValues(xsimd::batch<float> values) const final;
+  bool testDouble(double value) const final {
+    return testFloatingPoint(value);
+  }
 
-  bool testDoubleRange(double min, double max, bool hasNull) const final;
-  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
-  std::string toString() const final;
+  bool testFloat(float value) const final {
+    return testFloatingPoint(value);
+  }
+
+  xsimd::batch_bool<double> testValues(xsimd::batch<double>) const final;
+  xsimd::batch_bool<float> testValues(xsimd::batch<float>) const final;
+
+  bool testDoubleRange(double min, double max, bool hasNull) const final {
+    if (hasNull && nullAllowed_) {
+      return true;
+    }
+
+    return !(
+        (!upperUnbounded_ && min > upper_) ||
+        (!lowerUnbounded_ && max < lower_));
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final {
+    switch (other->kind()) {
+      case FilterKind::kAlwaysTrue:
+      case FilterKind::kAlwaysFalse:
+      case FilterKind::kIsNull:
+        return other->mergeWith(this);
+      case FilterKind::kIsNotNull:
+        return std::make_unique<FloatingPointRange<T>>(
+            lower_,
+            lowerUnbounded_,
+            lowerExclusive_,
+            upper_,
+            upperUnbounded_,
+            upperExclusive_,
+            false);
+      case FilterKind::kDoubleRange:
+      case FilterKind::kFloatRange: {
+        bool bothNullAllowed = nullAllowed_ && other->testNull();
+
+        auto otherRange = static_cast<const FloatingPointRange<T>*>(other);
+
+        auto lower = std::max(lower_, otherRange->lower_);
+        auto upper = std::min(upper_, otherRange->upper_);
+
+        auto bothLowerUnbounded =
+            lowerUnbounded_ && otherRange->lowerUnbounded_;
+        auto bothUpperUnbounded =
+            upperUnbounded_ && otherRange->upperUnbounded_;
+
+        auto lowerExclusive = !bothLowerUnbounded &&
+            (!testDouble(lower) || !other->testDouble(lower));
+        auto upperExclusive = !bothUpperUnbounded &&
+            (!testDouble(upper) || !other->testDouble(upper));
+
+        if (lower > upper || (lower == upper && lowerExclusive_)) {
+          if (bothNullAllowed) {
+            return std::make_unique<IsNull>();
+          }
+          return std::make_unique<AlwaysFalse>();
+        }
+
+        return std::make_unique<FloatingPointRange<T>>(
+            lower,
+            bothLowerUnbounded,
+            lowerExclusive,
+            upper,
+            bothUpperUnbounded,
+            upperExclusive,
+            bothNullAllowed);
+      }
+      default:
+        BOLT_UNREACHABLE();
+    }
+  }
+
+  std::string toString() const override;
+
   bool testingEquals(const Filter& other) const final;
-  bool isSingleValue() const;
 
  private:
-  // Core testing logic
-  template <typename V>
-  bool testRange(V value) const;
+  std::string toString(const std::string& name) const {
+    return fmt::format(
+        "{}: {}{}, {}{} {}",
+        name,
+        (lowerExclusive_ || lowerUnbounded_) ? "(" : "[",
+        lowerUnbounded_ ? "-inf" : std::to_string(lower_),
+        upperUnbounded_ ? "nan" : std::to_string(upper_),
+        (upperExclusive_ && !upperUnbounded_) ? ")" : "]",
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
 
-  // Special handling for float-to-double comparison
-  std::string toString(const std::string& name) const;
+  bool testFloatingPoint(T value) const {
+    if (std::isnan(value)) {
+      return upperUnbounded_;
+    }
+    if (!lowerUnbounded_) {
+      if (value < lower_) {
+        return false;
+      }
+      if (lowerExclusive_ && lower_ == value) {
+        return false;
+      }
+    }
+    if (!upperUnbounded_) {
+      if (value > upper_) {
+        return false;
+      }
+      if (upperExclusive_ && value == upper_) {
+        return false;
+      }
+    }
+    return true;
+  }
 
-  // SIMD optimization for floating point tests
-  xsimd::batch_bool<T> testFloatingPoints(xsimd::batch<T> values) const;
+  xsimd::batch_bool<T> testFloatingPoints(xsimd::batch<T> values) const {
+    xsimd::batch_bool<T> result;
+    if (!lowerUnbounded_) {
+      auto allLower = xsimd::broadcast<T>(lower_);
+      if (lowerExclusive_) {
+        result = allLower < values;
+      } else {
+        result = allLower <= values;
+      }
+      if (!upperUnbounded_) {
+        auto allUpper = xsimd::broadcast<T>(upper_);
+        if (upperExclusive_) {
+          result = result & (values < allUpper);
+        } else {
+          result = result & (values <= allUpper);
+        }
+      }
+    } else {
+      auto allUpper = xsimd::broadcast<T>(upper_);
+      if (upperExclusive_) {
+        result = values < allUpper;
+      } else {
+        result = values <= allUpper;
+      }
+    }
+    if (upperUnbounded_) {
+      auto nanResult = xsimd::isnan(values);
+      result = xsimd::bitwise_or(nanResult, result);
+    }
+    return result;
+  }
 
   const T lower_;
   const T upper_;
-  const bool isSingleValue_;
 };
 
-// Specializations must come before extern template declarations
 template <>
 inline std::string FloatingPointRange<double>::toString() const {
   return toString("DoubleRange");
@@ -98,26 +260,42 @@ inline std::string FloatingPointRange<float>::toString() const {
 }
 
 template <>
-inline folly::dynamic FloatingPointRange<float>::serialize() const {
-  auto obj = AbstractRange::serializeBase("FloatRange");
-  obj["lower"] = lower_;
-  obj["upper"] = upper_;
-  return obj;
+inline bool FloatingPointRange<float>::testingEquals(
+    const Filter& other) const {
+  return toString() == other.toString();
 }
 
 template <>
-inline folly::dynamic FloatingPointRange<double>::serialize() const {
-  auto obj = AbstractRange::serializeBase("DoubleRange");
-  obj["lower"] = lower_;
-  obj["upper"] = upper_;
-  return obj;
+inline bool FloatingPointRange<double>::testingEquals(
+    const Filter& other) const {
+  return toString() == other.toString();
 }
 
-// Extern template declarations
-extern template class FloatingPointRange<float>;
-extern template class FloatingPointRange<double>;
+template <>
+inline xsimd::batch_bool<double> FloatingPointRange<double>::testValues(
+    xsimd::batch<double> x) const {
+  return testFloatingPoints(x);
+}
 
-using FloatRange = FloatingPointRange<float>;
+template <>
+inline xsimd::batch_bool<float> FloatingPointRange<double>::testValues(
+    xsimd::batch<float>) const {
+  BOLT_FAIL("Not defined for double filter");
+}
+
+template <>
+inline xsimd::batch_bool<double> FloatingPointRange<float>::testValues(
+    xsimd::batch<double>) const {
+  BOLT_FAIL("Not defined for float filter");
+}
+
+template <>
+inline xsimd::batch_bool<float> FloatingPointRange<float>::testValues(
+    xsimd::batch<float> x) const {
+  return testFloatingPoints(x);
+}
+
 using DoubleRange = FloatingPointRange<double>;
+using FloatRange = FloatingPointRange<float>;
 
 } // namespace bytedance::bolt::common

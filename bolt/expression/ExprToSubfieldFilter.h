@@ -30,179 +30,500 @@
 
 #pragma once
 
-#include <string>
 #include "bolt/core/ExpressionEvaluator.h"
 #include "bolt/core/Expressions.h"
 #include "bolt/core/ITypedExpr.h"
+#include "bolt/type/Filter.h"
 #include "bolt/type/Subfield.h"
 #include "bolt/type/filter/FilterBase.h"
-#include "bolt/type/filter/FilterCreator.h"
+
 namespace bytedance::bolt::exec {
+inline std::unique_ptr<common::BigintRange> lessThan(
+    int64_t max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BigintRange>(
+      std::numeric_limits<int64_t>::min(), max - 1, nullAllowed);
+}
+
+inline std::unique_ptr<common::BigintRange> lessThanOrEqual(
+    int64_t max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BigintRange>(
+      std::numeric_limits<int64_t>::min(), max, nullAllowed);
+}
+
+inline std::unique_ptr<common::BigintRange> greaterThan(
+    int64_t min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BigintRange>(
+      min + 1, std::numeric_limits<int64_t>::max(), nullAllowed);
+}
+
+inline std::unique_ptr<common::BigintRange> greaterThanOrEqual(
+    int64_t min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BigintRange>(
+      min, std::numeric_limits<int64_t>::max(), nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedBigintRange> notEqual(
+    int64_t val,
+    bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBigintRange>(val, val, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedBigintRange>
+notBetween(int64_t lower, int64_t upper, bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBigintRange>(
+      lower, upper, nullAllowed);
+}
+
+inline std::unique_ptr<common::DoubleRange> lessThanDouble(
+    double max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::DoubleRange>(
+      std::numeric_limits<double>::lowest(),
+      true,
+      true,
+      max,
+      false,
+      true,
+      nullAllowed);
+}
+
+inline std::unique_ptr<common::DoubleRange> lessThanOrEqualDouble(
+    double max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::DoubleRange>(
+      std::numeric_limits<double>::lowest(),
+      true,
+      true,
+      max,
+      false,
+      false,
+      nullAllowed);
+}
+
+inline std::unique_ptr<common::DoubleRange> greaterThanDouble(
+    double min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::DoubleRange>(
+      min,
+      false,
+      true,
+      std::numeric_limits<double>::max(),
+      true,
+      true,
+      nullAllowed);
+}
+
+inline std::unique_ptr<common::DoubleRange> greaterThanOrEqualDouble(
+    double min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::DoubleRange>(
+      min,
+      false,
+      false,
+      std::numeric_limits<double>::max(),
+      true,
+      true,
+      nullAllowed);
+}
+
+inline std::unique_ptr<common::DoubleRange>
+betweenDouble(double min, double max, bool nullAllowed = false) {
+  return std::make_unique<common::DoubleRange>(
+      min, false, false, max, false, false, nullAllowed);
+}
+
+inline std::unique_ptr<common::FloatRange> lessThanFloat(
+    float max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::FloatRange>(
+      std::numeric_limits<float>::lowest(),
+      true,
+      true,
+      max,
+      false,
+      true,
+      nullAllowed);
+}
+
+inline std::unique_ptr<common::FloatRange> lessThanOrEqualFloat(
+    float max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::FloatRange>(
+      std::numeric_limits<float>::lowest(),
+      true,
+      true,
+      max,
+      false,
+      false,
+      nullAllowed);
+}
+
+inline std::unique_ptr<common::FloatRange> greaterThanFloat(
+    float min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::FloatRange>(
+      min,
+      false,
+      true,
+      std::numeric_limits<float>::max(),
+      true,
+      true,
+      nullAllowed);
+}
+
+inline std::unique_ptr<common::FloatRange> greaterThanOrEqualFloat(
+    float min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::FloatRange>(
+      min,
+      false,
+      false,
+      std::numeric_limits<float>::max(),
+      true,
+      true,
+      nullAllowed);
+}
+
+inline std::unique_ptr<common::FloatRange>
+betweenFloat(float min, float max, bool nullAllowed = false) {
+  return std::make_unique<common::FloatRange>(
+      min, false, false, max, false, false, nullAllowed);
+}
+
+inline std::unique_ptr<common::BigintRange>
+between(int64_t min, int64_t max, bool nullAllowed = false) {
+  return std::make_unique<common::BigintRange>(min, max, nullAllowed);
+}
+
+inline std::unique_ptr<common::BigintMultiRange> bigintOr(
+    std::unique_ptr<common::BigintRange> a,
+    std::unique_ptr<common::BigintRange> b,
+    bool nullAllowed = false) {
+  std::vector<std::unique_ptr<common::BigintRange>> filters;
+  filters.emplace_back(std::move(a));
+  filters.emplace_back(std::move(b));
+  return std::make_unique<common::BigintMultiRange>(
+      std::move(filters), nullAllowed);
+}
+
+inline std::unique_ptr<common::BigintMultiRange> bigintOr(
+    std::unique_ptr<common::BigintRange> a,
+    std::unique_ptr<common::BigintRange> b,
+    std::unique_ptr<common::BigintRange> c,
+    bool nullAllowed = false) {
+  std::vector<std::unique_ptr<common::BigintRange>> filters;
+  filters.emplace_back(std::move(a));
+  filters.emplace_back(std::move(b));
+  filters.emplace_back(std::move(c));
+  return std::make_unique<common::BigintMultiRange>(
+      std::move(filters), nullAllowed);
+}
+
+inline std::unique_ptr<common::BytesValues> equal(
+    const std::string& value,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BytesValues>(
+      std::vector<std::string>{value}, nullAllowed);
+}
+
+inline std::unique_ptr<common::BigintRange> equal(
+    int64_t value,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BigintRange>(value, value, nullAllowed);
+}
+
+inline std::unique_ptr<common::BytesRange>
+between(std::string min, std::string max, bool nullAllowed = false) {
+  return std::make_unique<common::BytesRange>(
+      std::move(min), false, false, std::move(max), false, false, nullAllowed);
+}
+
+inline std::unique_ptr<common::BytesRange>
+betweenExclusive(std::string min, std::string max, bool nullAllowed = false) {
+  return std::make_unique<common::BytesRange>(
+      std::move(min), false, true, std::move(max), false, true, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedBytesRange>
+notBetween(std::string min, std::string max, bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBytesRange>(
+      std::move(min), false, false, std::move(max), false, false, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedBytesRange> notBetweenExclusive(
+    std::string min,
+    std::string max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBytesRange>(
+      std::move(min), false, true, std::move(max), false, true, nullAllowed);
+}
+
+inline std::unique_ptr<common::BytesRange> lessThanOrEqual(
+    std::string max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BytesRange>(
+      "", true, false, std::move(max), false, false, nullAllowed);
+}
+
+inline std::unique_ptr<common::BytesRange> lessThan(
+    std::string max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BytesRange>(
+      "", true, false, std::move(max), false, true, nullAllowed);
+}
+
+inline std::unique_ptr<common::BytesRange> greaterThanOrEqual(
+    std::string min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BytesRange>(
+      std::move(min), false, false, "", true, false, nullAllowed);
+}
+
+inline std::unique_ptr<common::BytesRange> greaterThan(
+    std::string min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BytesRange>(
+      std::move(min), false, true, "", true, false, nullAllowed);
+}
+
+inline std::unique_ptr<common::Filter> in(
+    const std::vector<int64_t>& values,
+    bool nullAllowed = false) {
+  return common::createBigintValues(values, nullAllowed);
+}
+
+inline std::unique_ptr<common::Filter> notIn(
+    const std::vector<int64_t>& values,
+    bool nullAllowed = false) {
+  return common::createNegatedBigintValues(values, nullAllowed);
+}
+
+inline std::unique_ptr<common::BytesValues> in(
+    const std::vector<std::string>& values,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BytesValues>(values, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedBytesValues> notIn(
+    const std::vector<std::string>& values,
+    bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBytesValues>(values, nullAllowed);
+}
+
+inline std::unique_ptr<common::BoolValue> boolEqual(
+    bool value,
+    bool nullAllowed = false) {
+  return std::make_unique<common::BoolValue>(value, nullAllowed);
+}
+
+inline std::unique_ptr<common::IsNull> isNull() {
+  return std::make_unique<common::IsNull>();
+}
+
+inline std::unique_ptr<common::IsNotNull> isNotNull() {
+  return std::make_unique<common::IsNotNull>();
+}
+
+template <typename T>
+std::unique_ptr<common::MultiRange>
+orFilter(std::unique_ptr<T> a, std::unique_ptr<T> b, bool nullAllowed = false) {
+  std::vector<std::unique_ptr<common::Filter>> filters;
+  filters.emplace_back(std::move(a));
+  filters.emplace_back(std::move(b));
+  return std::make_unique<common::MultiRange>(
+      std::move(filters), nullAllowed, false);
+}
+
+inline std::unique_ptr<common::HugeintRange> lessThanHugeint(
+    int128_t max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(
+      std::numeric_limits<int128_t>::min(), max - 1, nullAllowed);
+}
+
+inline std::unique_ptr<common::HugeintRange> lessThanOrEqualHugeint(
+    int128_t max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(
+      std::numeric_limits<int128_t>::min(), max, nullAllowed);
+}
+
+inline std::unique_ptr<common::HugeintRange> greaterThanHugeint(
+    int128_t min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(
+      min + 1, std::numeric_limits<int128_t>::max(), nullAllowed);
+}
+
+inline std::unique_ptr<common::HugeintRange> greaterThanOrEqualHugeint(
+    int128_t min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(
+      min, std::numeric_limits<int128_t>::max(), nullAllowed);
+}
+
+inline std::unique_ptr<common::HugeintRange> equalHugeint(
+    int128_t value,
+    bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(value, value, nullAllowed);
+}
+
+inline std::unique_ptr<common::HugeintRange>
+betweenHugeint(int128_t min, int128_t max, bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(min, max, nullAllowed);
+}
+
+inline std::unique_ptr<common::TimestampRange> equal(
+    const Timestamp& value,
+    bool nullAllowed = false) {
+  return std::make_unique<common::TimestampRange>(value, value, nullAllowed);
+}
+
+inline std::unique_ptr<common::TimestampRange>
+between(const Timestamp& min, const Timestamp& max, bool nullAllowed = false) {
+  return std::make_unique<common::TimestampRange>(min, max, nullAllowed);
+}
+
+inline std::unique_ptr<common::TimestampRange> lessThan(
+    Timestamp max,
+    bool nullAllowed = false) {
+  --max;
+  return std::make_unique<common::TimestampRange>(
+      std::numeric_limits<Timestamp>::min(), max, nullAllowed);
+}
+
+inline std::unique_ptr<common::TimestampRange> lessThanOrEqual(
+    const Timestamp& max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::TimestampRange>(
+      std::numeric_limits<Timestamp>::min(), max, nullAllowed);
+}
+
+inline std::unique_ptr<common::TimestampRange> greaterThan(
+    Timestamp min,
+    bool nullAllowed = false) {
+  ++min;
+  return std::make_unique<common::TimestampRange>(
+      min, std::numeric_limits<Timestamp>::max(), nullAllowed);
+}
+
+inline std::unique_ptr<common::TimestampRange> greaterThanOrEqual(
+    const Timestamp& min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::TimestampRange>(
+      min, std::numeric_limits<Timestamp>::max(), nullAllowed);
+}
 
 std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
     const core::TypedExprPtr& expr,
-    core::ExpressionEvaluator*);
+    core::ExpressionEvaluator* evaluator);
 
-/// Convert a leaf call expression (no conjunction like AND/OR) to subfield and
-/// filter.  Return nullptr if not supported for pushdown.  This is needed
-/// because this conversion is frequently applied when extracting filters from
-/// remaining filter in readers.  Frequent throw clutters logs and slows down
-/// execution.
-std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
-    const core::CallTypedExpr&,
-    common::Subfield&,
-    core::ExpressionEvaluator*,
-    bool negated = false);
-
-struct SubfieldFilterResult {
-  std::optional<common::Subfield> subfield;
-  std::unique_ptr<common::Filter> filter;
-
-  static SubfieldFilterResult unsupported() {
-    std::vector<std::unique_ptr<common::Subfield::PathElement>> path;
-    path.push_back(std::make_unique<common::Subfield::AllSubscripts>());
-    return SubfieldFilterResult{
-        std::make_optional<common::Subfield>(std::move(path)), nullptr};
-  }
-
-  static SubfieldFilterResult create(
-      const common::Subfield& subfield,
-      std::unique_ptr<common::Filter>&& filter) {
-    return SubfieldFilterResult{
-        std::make_optional(subfield.clone()), std::move(filter)};
-  }
-};
-
-class ColumnFilterBuilder {
+/// Language-specific translator of generic expressions into subfield filters.
+/// Default language is Presto. A different language can be supported by
+/// registering language-specific implementation using 'registerParser' API.
+class ExprToSubfieldFilterParser {
  public:
-  using FilterBuilderFunc = SubfieldFilterResult (*)(
-      const core::CallTypedExpr&,
-      const common::Subfield&,
-      core::ExpressionEvaluator*,
-      bool);
+  virtual ~ExprToSubfieldFilterParser() = default;
 
-  static SubfieldFilterResult tryBuild(
-      const core::CallTypedExpr& expr,
+  /// Returns a parser provided to an earlier 'registerParser' call. Not thread
+  /// safe.
+  static const std::shared_ptr<ExprToSubfieldFilterParser>& getInstance() {
+    BOLT_CHECK_NOT_NULL(parser_, "Parser is not registered");
+    return parser_;
+  }
+
+  /// Registers a parser. Silently overwrites previously registered parser if
+  /// any. Not thread safe.
+  static void registerParser(
+      std::shared_ptr<ExprToSubfieldFilterParser> parser) {
+    BOLT_CHECK_NOT_NULL(parser);
+    parser_ = std::move(parser);
+  }
+
+  /// Analyzes 'call' expression to determine if it can be expressed as a
+  /// subfield filter. Returns the subfield and filter if so. Otherwise, returns
+  /// std::nullopt. If 'negated' is true, considers the negation of 'call'
+  /// expressions (not(call)). It is possible that 'call' expression can be
+  /// represented as subfield filter, but its negation cannot.
+  virtual std::optional<
+      std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+  leafCallToSubfieldFilter(
+      const core::CallTypedExpr& call,
+      core::ExpressionEvaluator* evaluator,
+      bool negated = false) = 0;
+
+  static std::unique_ptr<common::Filter> makeOrFilter(
+      std::unique_ptr<common::Filter> a,
+      std::unique_ptr<common::Filter> b);
+
+ protected:
+  // Converts an expression into a subfield. Returns false if the expression
+  // is not a valid field expression.
+  static bool toSubfield(
+      const core::ITypedExpr* field,
+      common::Subfield& subfield);
+
+  // Creates a non-equal subfield filter against the given constant.
+  static std::unique_ptr<common::Filter> makeNotEqualFilter(
+      const core::TypedExprPtr& valueExpr,
+      core::ExpressionEvaluator* evaluator);
+
+  // Creates an equal subfield filter against the given constant.
+  static std::unique_ptr<common::Filter> makeEqualFilter(
+      const core::TypedExprPtr& valueExpr,
+      core::ExpressionEvaluator* evaluator);
+
+  // Creates a greater-than subfield filter against the given constant.
+  static std::unique_ptr<common::Filter> makeGreaterThanFilter(
+      const core::TypedExprPtr& lowerExpr,
+      core::ExpressionEvaluator* evaluator);
+
+  // Creates a less-than subfield filter against the given constant.
+  static std::unique_ptr<common::Filter> makeLessThanFilter(
+      const core::TypedExprPtr& upperExpr,
+      core::ExpressionEvaluator* evaluator);
+
+  // Creates a less-than-or-equal subfield filter against the given constant.
+  static std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
+      const core::TypedExprPtr& upperExpr,
+      core::ExpressionEvaluator* evaluator);
+
+  // Creates a greater-than-or-equal subfield filter against the given constant.
+  static std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
+      const core::TypedExprPtr& lowerExpr,
+      core::ExpressionEvaluator* evaluator);
+
+  // Creates an in subfield filter against the given vector.
+  static std::unique_ptr<common::Filter> makeInFilter(
+      const core::TypedExprPtr& expr,
+      core::ExpressionEvaluator* evaluator,
+      bool negated);
+
+  // Creates a between subfield filter against the given lower and upper
+  // bounds.
+  static std::unique_ptr<common::Filter> makeBetweenFilter(
+      const core::TypedExprPtr& lowerExpr,
+      const core::TypedExprPtr& upperExpr,
       core::ExpressionEvaluator* evaluator,
       bool negated);
 
  private:
-  static std::optional<common::Subfield> extractColumnAccess(
-      const core::ITypedExpr* expr);
-
-  /// Builds a comparison filter for expressions like:
-  /// - field <op> constant
-  /// - constant <op> field
-  /// - CAST(field) <op> constant
-  /// - constant <op> CAST(field)
-  /// - CAST(field) <op> CAST(constant)
-  ///
-  /// where <op> can be =, !=, <, <=, >, >= and field may have a CAST
-  /// expression.
-  ///
-  /// Examples of supported expressions:
-  /// - CAST(column AS DOUBLE) > 10.5
-  /// - column = 42
-  /// - 100 < CAST(column AS INTEGER)
-  /// - CAST(column AS DOUBLE) = CAST('123' AS DOUBLE)
-  ///
-  /// @param expr The comparison expression to build a filter for. Must contain
-  /// exactly two inputs:
-  ///            one side must be a field access (possibly with CAST) and the
-  ///            other must be a constant or an expression that can be evaluated
-  ///            to a constant. The constant side may also include a CAST.
-  /// @param subfield The extracted field path from the expression.
-  /// @param evaluator Expression evaluator used to evaluate non-constant
-  /// expressions to constants.
-  /// @param negated Whether the filter should be negated.
-  ///
-  /// @return A SubfieldFilterResult containing:
-  ///         - A Filter implementing the comparison if successful
-  ///         - The subfield representing the column being filtered
-  ///         - Empty filter and invalid subfield if the expression is not
-  ///         supported
-  ///
-  /// The function handles:
-  /// - Commutative operators (=, !=) and non-commutative operators (<, <=, >,
-  /// >=)
-  /// - Swapped operands (constant on left vs right)
-  /// - Negation of comparisons
-  /// - CAST expressions on either or both sides
-  /// - Evaluation of non-constant expressions to constants
-  ///
-  /// The function returns unsupported result if:
-  /// - The expression has fewer than 2 inputs
-  /// - Neither input contains a field access
-  /// - The non-field input cannot be evaluated to a constant
-  /// - The comparison operator is not supported
-  static SubfieldFilterResult buildComparisonFilter(
-      const core::CallTypedExpr& expr,
-      const common::Subfield& subfield,
-      core::ExpressionEvaluator* evaluator,
-      bool negated);
-
-  static SubfieldFilterResult buildBetweenFilter(
-      const core::CallTypedExpr& expr,
-      const common::Subfield& subfield,
-      core::ExpressionEvaluator* evaluator,
-      bool negated);
-
-  static SubfieldFilterResult buildInFilter(
-      const core::CallTypedExpr& expr,
-      const common::Subfield& subfield,
-      core::ExpressionEvaluator* evaluator,
-      bool negated);
-
-  static SubfieldFilterResult buildIsNullFilter(
-      const core::CallTypedExpr& expr,
-      const common::Subfield& subfield,
-      core::ExpressionEvaluator*,
-      bool negated);
-
-  static SubfieldFilterResult buildLikeFilter(
-      const core::CallTypedExpr& expr,
-      const common::Subfield& subfield,
-      core::ExpressionEvaluator* evaluator,
-      bool negated);
-
-  static const std::unordered_map<std::string, FilterBuilderFunc>
-      filterBuilders_;
+  // Singleton parser instance.
+  static std::shared_ptr<ExprToSubfieldFilterParser> parser_;
 };
 
-inline bool isEqualityFn(const std::string& functionName) {
-  return functionName == "eq" || functionName == "presto.default.eq" ||
-      functionName == "equalto";
-}
-
-inline bool isNotEqualFn(const std::string& functionName) {
-  return functionName == "neq" || functionName == "presto.default.neq" ||
-      functionName == "notequalto";
-}
-
-inline bool isLessThanFn(const std::string& functionName) {
-  return functionName == "lt" || functionName == "presto.default.lt" ||
-      functionName == "lessthan";
-}
-
-inline bool isGreaterThanFn(const std::string& functionName) {
-  return functionName == "gt" || functionName == "presto.default.gt" ||
-      functionName == "greaterthan";
-}
-
-inline bool isLessThanOrEqualFn(const std::string& functionName) {
-  return functionName == "lte" || functionName == "presto.default.lte" ||
-      functionName == "lessthanorequal";
-}
-
-inline bool isGreaterThanOrEqualFn(const std::string& functionName) {
-  return functionName == "gte" || functionName == "presto.default.gte" ||
-      functionName == "greaterthanorequal";
-}
-
-inline bool isLikeFn(const std::string& functionName) {
-  return functionName == "like" ||
-      functionName ==
-      "presto.default.like"; // Note: no presto.default alias for 'like'
-}
+// Parser for Presto expressions.
+class PrestoExprToSubfieldFilterParser : public ExprToSubfieldFilterParser {
+ public:
+  std::optional<std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+  leafCallToSubfieldFilter(
+      const core::CallTypedExpr& call,
+      core::ExpressionEvaluator* evaluator,
+      bool negated = false) override;
+};
 
 } // namespace bytedance::bolt::exec

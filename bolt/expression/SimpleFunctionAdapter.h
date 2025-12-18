@@ -433,6 +433,10 @@ class SimpleFunctionAdapter : public VectorFunction {
     }
   }
 
+  FunctionCanonicalName getCanonicalName() const final {
+    return fn_->getCanonicalName();
+  }
+
   bool isDeterministic() const override {
     return fn_->isDeterministic();
   }

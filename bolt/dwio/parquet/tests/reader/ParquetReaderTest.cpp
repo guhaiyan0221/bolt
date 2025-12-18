@@ -33,9 +33,10 @@
 #include <type/HugeInt.h>
 #include <type/Type.h>
 #include "bolt/dwio/parquet/tests/ParquetTestBase.h"
-#include "bolt/type/filter/FilterCreator.h"
+#include "bolt/expression/ExprToSubfieldFilter.h"
 #include "bolt/vector/BaseVector.h"
 #include "bolt/vector/tests/utils/VectorMaker.h"
+
 using namespace bytedance::bolt;
 using namespace bytedance::bolt::common;
 using namespace bytedance::bolt::dwio::common;
@@ -757,7 +758,7 @@ TEST_F(ParquetReaderTest, intMultipleFilters) {
 TEST_F(ParquetReaderTest, doubleFilters) {
   // Read sample.parquet with the double filter "b < 10.0".
   FilterMap filters;
-  filters.insert({"b", exec::lessThan(10.0)});
+  filters.insert({"b", exec::lessThanDouble(10.0)});
 
   auto expected = makeRowVector({
       makeFlatVector<int64_t>(9, [](auto row) { return row + 1; }),
@@ -766,42 +767,47 @@ TEST_F(ParquetReaderTest, doubleFilters) {
 
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b <= 10.0".
-  filters.insert({"b", exec::lessThanOrEqual(10.0)});
+  filters.insert({"b", exec::lessThanOrEqualDouble(10.0)});
   expected = makeRowVector({
       makeFlatVector<int64_t>(10, [](auto row) { return row + 1; }),
       makeFlatVector<double>(10, [](auto row) { return row + 1; }),
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b between 10.0 and 14.0".
-  filters.insert({"b", exec::between(10.0, 14.0)});
+  filters.insert({"b", exec::betweenDouble(10.0, 14.0)});
   expected = makeRowVector({
       makeFlatVector<int64_t>(5, [](auto row) { return row + 10; }),
       makeFlatVector<double>(5, [](auto row) { return row + 10; }),
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b > 14.0".
-  filters.insert({"b", exec::greaterThan<double>(14.0)});
+  filters.insert({"b", exec::greaterThanDouble(14.0)});
   expected = makeRowVector({
       makeFlatVector<int64_t>(6, [](auto row) { return row + 15; }),
       makeFlatVector<double>(6, [](auto row) { return row + 15; }),
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b >= 14.0".
-  filters.insert({"b", exec::greaterThanOrEqual(14.0)});
+  filters.insert({"b", exec::greaterThanOrEqualDouble(14.0)});
   expected = makeRowVector({
       makeFlatVector<int64_t>(7, [](auto row) { return row + 14; }),
       makeFlatVector<double>(7, [](auto row) { return row + 14; }),
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 }
 
 TEST_F(ParquetReaderTest, varcharFilters) {

@@ -1354,7 +1354,7 @@ TEST_F(TableScanTest, missingColumns) {
 
   // Use missing column 'c1' in 'is null' filter, while not selecting 'c1'.
   SubfieldFilters filters;
-  filters[common::Subfield("c1")] = lessThanOrEqual(1050.0, true);
+  filters[common::Subfield("c1")] = lessThanOrEqualDouble(1050.0, true);
   auto tableHandle = std::make_shared<HiveTableHandle>(
       kHiveConnectorId, "tmp", true, std::move(filters), nullptr, dataColumns);
   ColumnHandleMap assignments;

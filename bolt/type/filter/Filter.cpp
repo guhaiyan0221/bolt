@@ -706,7 +706,7 @@ bool NegatedTimestampRange::testInt128(const int128_t& value) const {
   return !nonNegated_->testInt128(value);
 }
 
-bool NegatedTimestampRange::testTimestamp(Timestamp value) const {
+bool NegatedTimestampRange::testTimestamp(const Timestamp& value) const {
   return !nonNegated_->testTimestamp(value);
 }
 
@@ -1215,29 +1215,8 @@ bool NegatedBytesValues::testingEquals(const Filter& other) const {
       nonNegated_->testingEquals((*(otherNegatedBytesValues->nonNegated_)));
 }
 
-MultiRange::MultiRange(
-    std::vector<std::unique_ptr<Filter>> filters,
-    bool nullAllowed,
-    bool nanAllowed)
-    : Filter(true, nullAllowed, FilterKind::kMultiRange),
-      filters_(std::move(filters)),
-      nanAllowed_(nanAllowed) {}
-
-const std::vector<std::unique_ptr<Filter>>& MultiRange::filters() const {
-  return filters_;
-}
-
-bool MultiRange::nanAllowed() const {
-  return nanAllowed_;
-}
-
-bool MultiRange::hasTestLength() const {
-  return true;
-}
-
 folly::dynamic MultiRange::serialize() const {
   auto obj = Filter::serializeBase("MultiRange");
-  obj["nanAllowed"] = nanAllowed_;
   folly::dynamic arr = folly::dynamic::array;
   for (const auto& f : filters_) {
     arr.push_back(f->serialize());
@@ -1246,9 +1225,12 @@ folly::dynamic MultiRange::serialize() const {
   return obj;
 }
 
-FilterPtr MultiRange::create(const folly::dynamic& obj) {
+bool MultiRange::hasTestLength() const {
+  return true;
+}
+
+std::unique_ptr<Filter> MultiRange::create(const folly::dynamic& obj) {
   auto nullAllowed = deserializeNullAllowed(obj);
-  auto nanAllowed = obj["nanAllowed"].asBool();
   folly::dynamic arr = obj["filters"];
   auto tmpFilters = ISerializable::deserialize<std::vector<Filter>>(arr);
 
@@ -1258,14 +1240,13 @@ FilterPtr MultiRange::create(const folly::dynamic& obj) {
     filters.emplace_back(f->clone());
   }
 
-  return std::make_unique<MultiRange>(
-      std::move(filters), nullAllowed, nanAllowed);
+  return std::make_unique<MultiRange>(std::move(filters), nullAllowed);
 }
 
 bool MultiRange::testingEquals(const Filter& other) const {
   auto otherMultiRange = dynamic_cast<const MultiRange*>(&other);
   auto res = otherMultiRange != nullptr && Filter::testingBaseEquals(other) &&
-      nanAllowed_ == otherMultiRange->nanAllowed_ &&
+
       filters_.size() == otherMultiRange->filters_.size();
 
   if (!res) {
@@ -1612,6 +1593,17 @@ BigintMultiRange::BigintMultiRange(
   }
 }
 
+namespace {
+int compareRanges(const char* lhs, size_t length, const std::string& rhs) {
+  int size = std::min(length, rhs.length());
+  int compare = memcmp(lhs, rhs.data(), size);
+  if (compare) {
+    return compare;
+  }
+  return length - rhs.size();
+}
+} // namespace
+
 bool BytesRange::testBytes(const char* value, int32_t length) const {
   if (length == 0) {
     // Empty string. value is null. This is the smallest possible string.
@@ -1631,15 +1623,13 @@ bool BytesRange::testBytes(const char* value, int32_t length) const {
     return memcmp(value, lower_.data(), length) == 0;
   }
   if (!lowerUnbounded_) {
-    int compare = compareRanges(
-        std::string_view(value, length), std::string_view(lower_));
+    int compare = compareRanges(value, length, lower_);
     if (compare < 0 || (lowerExclusive_ && compare == 0)) {
       return false;
     }
   }
   if (!upperUnbounded_) {
-    int compare = compareRanges(
-        std::string_view(value, length), std::string_view(upper_));
+    int compare = compareRanges(value, length, upper_);
     return compare < 0 || (!upperExclusive_ && compare == 0);
   }
   return true;
@@ -1654,18 +1644,9 @@ bool BytesRange::testBytesRange(
   }
   // clang-format off
   return
-    (lowerUnbounded_ || !max.has_value() || compareRanges(max.value(), std::string_view(lower_)) >=  !!lowerExclusive_) &&
-    (upperUnbounded_ || !min.has_value() || compareRanges(min.value(), std::string_view(upper_)) <= -!!upperExclusive_);
+    (lowerUnbounded_ || !max.has_value() || compareRanges(max->data(), max->length(), lower_) >=  !!lowerExclusive_) &&
+    (upperUnbounded_ || !min.has_value() || compareRanges(min->data(), min->length(), upper_) <= -!!upperExclusive_);
   // clang-format on
-}
-
-bool BytesRange::testInt64Range(int64_t min, int64_t max, bool hasNull) const {
-  return testBytesRange(std::to_string(min), std::to_string(max), hasNull);
-}
-
-bool BytesRange::testInt64(int64_t value) const {
-  auto valueStr = std::to_string(value);
-  return testBytes(valueStr.c_str(), valueStr.size());
 }
 
 bool BytesValues::testBytesRange(
@@ -1693,93 +1674,6 @@ bool BytesValues::testBytesRange(
   }
 
   return true;
-}
-
-BytesRange::BytesRange(
-    const std::string& lower,
-    bool lowerUnbounded,
-    bool lowerExclusive,
-    const std::string& upper,
-    bool upperUnbounded,
-    bool upperExclusive,
-    bool nullAllowed)
-    : AbstractRange(
-          lowerUnbounded,
-          lowerExclusive,
-          upperUnbounded,
-          upperExclusive,
-          nullAllowed,
-          FilterKind::kBytesRange),
-      lower_(lower),
-      upper_(upper),
-      singleValue_(
-          !lowerExclusive_ && !upperExclusive_ && !lowerUnbounded_ &&
-          !upperUnbounded_ && lower_ == upper_) {
-  BOLT_CHECK(!lowerUnbounded_ || !upperUnbounded_);
-}
-
-BytesRange::BytesRange(const BytesRange& other, bool nullAllowed)
-    : AbstractRange(
-          other.lowerUnbounded_,
-          other.lowerExclusive_,
-          other.upperUnbounded_,
-          other.upperExclusive_,
-          nullAllowed,
-          FilterKind::kBytesRange),
-      lower_(other.lower_),
-      upper_(other.upper_),
-      singleValue_(other.singleValue_) {}
-
-std::unique_ptr<Filter> BytesRange::clone(
-    std::optional<bool> nullAllowed) const {
-  if (nullAllowed) {
-    return std::make_unique<BytesRange>(*this, nullAllowed.value());
-  }
-  return std::make_unique<BytesRange>(*this);
-}
-
-std::string BytesRange::toString() const {
-  return fmt::format(
-      "BytesRange: {}{}, {}{} {}",
-      (lowerUnbounded_ || lowerExclusive_) ? "(" : "[",
-      lowerUnbounded_ ? "..." : lower_,
-      upperUnbounded_ ? "..." : upper_,
-      (upperUnbounded_ || upperExclusive_) ? ")" : "]",
-      nullAllowed_ ? "with nulls" : "no nulls");
-}
-
-bool BytesRange::hasTestLength() const {
-  return true;
-}
-
-bool BytesRange::testLength(int length) const {
-  return !singleValue_ || lower_.size() == length;
-}
-
-xsimd::batch_bool<int32_t> BytesRange::testLengths(
-    xsimd::batch<int32_t> lengths) const {
-  BOLT_DCHECK(singleValue_);
-  return lengths == xsimd::broadcast<int32_t>(lower_.size());
-}
-
-bool BytesRange::isSingleValue() const {
-  return singleValue_;
-}
-
-bool BytesRange::isUpperUnbounded() const {
-  return upperUnbounded_;
-}
-
-bool BytesRange::isLowerUnbounded() const {
-  return lowerUnbounded_;
-}
-
-const std::string& BytesRange::lower() const {
-  return lower_;
-}
-
-const std::string& BytesRange::upper() const {
-  return upper_;
 }
 
 bool NegatedBytesRange::testBytesRange(
@@ -1908,17 +1802,13 @@ std::unique_ptr<Filter> MultiRange::clone(
 
   if (nullAllowed) {
     return std::make_unique<MultiRange>(
-        std::move(filters), nullAllowed.value(), nanAllowed_);
+        std::move(filters), nullAllowed.value());
   } else {
-    return std::make_unique<MultiRange>(
-        std::move(filters), nullAllowed_, nanAllowed_);
+    return std::make_unique<MultiRange>(std::move(filters), nullAllowed_);
   }
 }
 
 bool MultiRange::testDouble(double value) const {
-  if (std::isnan(value)) {
-    return nanAllowed_;
-  }
   for (const auto& filter : filters_) {
     if (filter->testDouble(value)) {
       return true;
@@ -1928,11 +1818,17 @@ bool MultiRange::testDouble(double value) const {
 }
 
 bool MultiRange::testFloat(float value) const {
-  if (std::isnan(value)) {
-    return nanAllowed_;
-  }
   for (const auto& filter : filters_) {
     if (filter->testFloat(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool MultiRange::testInt128(const int128_t& value) const {
+  for (const auto& filter : filters_) {
+    if (filter->testInt128(value)) {
       return true;
     }
   }
@@ -1948,7 +1844,7 @@ bool MultiRange::testBytes(const char* value, int32_t length) const {
   return false;
 }
 
-bool MultiRange::testTimestamp(Timestamp timestamp) const {
+bool MultiRange::testTimestamp(const Timestamp& timestamp) const {
   for (const auto& filter : filters_) {
     if (filter->testTimestamp(timestamp)) {
       return true;
@@ -1997,58 +1893,6 @@ bool MultiRange::testDoubleRange(double min, double max, bool hasNull) const {
   return false;
 }
 
-bool MultiRange::testInt64Range(int64_t min, int64_t max, bool hasNull) const {
-  if (hasNull && nullAllowed_) {
-    return true;
-  }
-
-  for (const auto& filter : filters_) {
-    if (filter->testInt64Range(min, max, hasNull)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-bool MultiRange::testInt64(int64_t value) const {
-  for (const auto& filter : filters_) {
-    if (filter->testInt64(value)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool Like::testBloomFilter(
-    const std::vector<std::pair<
-        std::unique_ptr<struct NgramTokenExtractor>,
-        std::unique_ptr<NGramBloomFilter>>>& token_bloom_filters) const {
-  if (token_bloom_filters.size() == 0) {
-    return true;
-  }
-
-  for (auto split : value_) {
-    for (auto& token_bloom_filter : token_bloom_filters) {
-      BOLT_CHECK_NOT_NULL(token_bloom_filter.first);
-      BOLT_CHECK_NOT_NULL(token_bloom_filter.second);
-      uint32_t cur = 0;
-      std::string token;
-      auto tokenExtractor = token_bloom_filter.first.get();
-      auto bloomFilter = token_bloom_filter.second.get();
-      while (cur < split.size() &&
-             tokenExtractor->nextInStringLike(
-                 split.c_str(), split.size(), &cur, token)) {
-        if (!bloomFilter->mayContain(token)) {
-          return false;
-        }
-      }
-    }
-  }
-
-  return true;
-}
-
 std::unique_ptr<Filter> MultiRange::mergeWith(const Filter* other) const {
   switch (other->kind()) {
     // Rules of MultiRange with IsNull/IsNotNull
@@ -2063,20 +1907,47 @@ std::unique_ptr<Filter> MultiRange::mergeWith(const Filter* other) const {
     case FilterKind::kAlwaysFalse:
     case FilterKind::kIsNull:
     case FilterKind::kNegatedBytesRange:
-    case FilterKind::kCast:
       return other->mergeWith(this);
     case FilterKind::kIsNotNull:
       return this->clone(/*nullAllowed=*/false);
     case FilterKind::kDoubleRange:
-    case FilterKind::kFloatRange:
-      // TODO: Implement
-      BOLT_UNREACHABLE();
+    case FilterKind::kFloatRange: {
+      bool bothNullAllowed = nullAllowed_ && other->testNull();
+      std::vector<std::unique_ptr<Filter>> merged;
+
+      for (auto const& filter : this->filters()) {
+        auto innerMerged = filter->mergeWith(other);
+        switch (innerMerged->kind()) {
+          case FilterKind::kAlwaysFalse:
+          case FilterKind::kIsNull:
+            continue;
+          case FilterKind::kMultiRange: {
+            auto innerMergedMulti =
+                static_cast<const MultiRange*>(innerMerged.get());
+            merged.reserve(merged.size() + innerMergedMulti->filters().size());
+            for (int i = 0; i < innerMergedMulti->filters().size(); ++i) {
+              merged.emplace_back(innerMergedMulti->filters()[i]->clone());
+            }
+            break;
+          }
+          default:
+            merged.emplace_back(innerMerged.release());
+        }
+      }
+
+      if (merged.empty()) {
+        return nullOrFalse(bothNullAllowed);
+      } else if (merged.size() == 1) {
+        return merged.front()->clone(bothNullAllowed);
+      } else {
+        return std::make_unique<MultiRange>(std::move(merged), bothNullAllowed);
+      }
+    }
     case FilterKind::kBytesValues:
     case FilterKind::kNegatedBytesValues:
     case FilterKind::kBytesRange:
     case FilterKind::kMultiRange: {
       bool bothNullAllowed = nullAllowed_ && other->testNull();
-      bool bothNanAllowed = nanAllowed_;
       std::vector<const Filter*> otherFilters;
 
       if (other->kind() == FilterKind::kMultiRange) {
@@ -2084,7 +1955,6 @@ std::unique_ptr<Filter> MultiRange::mergeWith(const Filter* other) const {
         for (auto const& filterOther : multiRangeOther->filters()) {
           otherFilters.emplace_back(filterOther.get());
         }
-        bothNanAllowed = bothNanAllowed && multiRangeOther->nanAllowed();
       } else {
         otherFilters.emplace_back(other);
       }
@@ -2136,13 +2006,41 @@ std::unique_ptr<Filter> MultiRange::mergeWith(const Filter* other) const {
       } else if (merged.size() == 1) {
         return merged.front()->clone(bothNullAllowed);
       } else {
-        return std::make_unique<MultiRange>(
-            std::move(merged), bothNullAllowed, bothNanAllowed);
+        return std::make_unique<MultiRange>(std::move(merged), bothNullAllowed);
       }
     }
     default:
       BOLT_UNREACHABLE();
   }
+}
+
+bool Like::testBloomFilter(
+    const std::vector<std::pair<
+        std::unique_ptr<struct NgramTokenExtractor>,
+        std::unique_ptr<NGramBloomFilter>>>& token_bloom_filters) const {
+  if (token_bloom_filters.size() == 0) {
+    return true;
+  }
+
+  for (auto split : value_) {
+    for (auto& token_bloom_filter : token_bloom_filters) {
+      BOLT_CHECK_NOT_NULL(token_bloom_filter.first);
+      BOLT_CHECK_NOT_NULL(token_bloom_filter.second);
+      uint32_t cur = 0;
+      std::string token;
+      auto tokenExtractor = token_bloom_filter.first.get();
+      auto bloomFilter = token_bloom_filter.second.get();
+      while (cur < split.size() &&
+             tokenExtractor->nextInStringLike(
+                 split.c_str(), split.size(), &cur, token)) {
+        if (!bloomFilter->mayContain(token)) {
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
 }
 
 std::unique_ptr<Filter> IsNull::mergeWith(const Filter* other) const {
@@ -2868,7 +2766,6 @@ std::unique_ptr<Filter> BytesRange::mergeWith(const Filter* other) const {
     case FilterKind::kNegatedBytesValues:
     case FilterKind::kNegatedBytesRange:
     case FilterKind::kMultiRange:
-    case FilterKind::kCast:
       return other->mergeWith(this);
     case FilterKind::kBytesRange: {
       bool bothNullAllowed = nullAllowed_ && other->testNull();

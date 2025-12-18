@@ -200,12 +200,14 @@ std::unique_ptr<MetadataFilter::Node> MetadataFilter::Node::fromExpression(
         *call->inputs()[0], evaluator, !negated, enableMapSubscriptFilter);
   }
   try {
-    Subfield subfield;
-    auto filter =
-        exec::leafCallToSubfieldFilter(*call, subfield, evaluator, negated);
-    if (!filter) {
+    auto subfieldAndFilter =
+        exec::ExprToSubfieldFilterParser::getInstance()
+            ->leafCallToSubfieldFilter(*call, evaluator, negated);
+    if (!subfieldAndFilter.has_value()) {
       return nullptr;
     }
+
+    auto& [subfield, filter] = subfieldAndFilter.value();
     if (filter->kind() == FilterKind::kMapSubscript &&
         !enableMapSubscriptFilter) {
       return nullptr;

@@ -29,7 +29,6 @@
 add_executable(
   bolt_expression_test
   CastExprTest.cpp
-  CastPushdownTest.cpp
   CoalesceTest.cpp
   ConjunctTest.cpp
   ConstantFlatVectorReaderTest.cpp

@@ -231,7 +231,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
       addConjunct(filterExpr, filterNodeExpr);
     } else {
       auto [subfield, subfieldFilter] =
-          exec::toSubfieldFilter(filterExpr, &evaluator);
+          toSubfieldFilter(filterExpr, &evaluator);
 
       auto it = columnAliases_.find(subfield.toString());
       if (it != columnAliases_.end()) {

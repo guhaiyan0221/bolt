@@ -92,11 +92,6 @@ void configureRowReaderOptions(
     const std::shared_ptr<const HiveConfig>& hiveConfig = nullptr,
     const config::ConfigBase* sessionProperties = nullptr);
 
-bool applyPartitionFilter(
-    TypeKind kind,
-    const std::string& partitionValue,
-    common::Filter* filter);
-
 bool isHiveNull(const std::string& source);
 
 bool testFilters(
@@ -118,4 +113,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     std::vector<int>& columnCacheBlackList,
     const HiveConnectorSplitCacheLimit* hiveConnectorSplitCacheLimit);
 
+core::TypedExprPtr extractFiltersFromRemainingFilter(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    common::SubfieldFilters& filters);
 } // namespace bytedance::bolt::connector::hive
