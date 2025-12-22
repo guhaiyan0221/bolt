@@ -99,6 +99,7 @@ class DictionaryFilterTest : public ParquetTestBase {
     auto reader =
         createReader(filePath_, dwio::common::ReaderOptions{leafPool_.get()});
     dwio::common::RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setEnableDictionaryFilter(true);
     rowReaderOpts.setScanSpec(parentSpec);
 
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -324,6 +325,7 @@ TEST_F(DictionaryFilterTest, TestMultiColumnFilter) {
   int16sSpec->setFilter(common::createBigintValues({0}, true));
 
   dwio::common::RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setEnableDictionaryFilter(true);
   rowReaderOpts.setScanSpec(parentSpec);
 
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -512,6 +514,7 @@ TEST_F(DictionaryFilterTest, TestMultiValueDictionaryFilter) {
   parentSpec->addField("strings", stringChannel);
 
   dwio::common::RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setEnableDictionaryFilter(true);
   rowReaderOpts.setScanSpec(parentSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
@@ -555,13 +558,13 @@ TEST_F(DictionaryFilterTest, TestMultiValueDictionaryFilter) {
 }
 
 TEST_F(DictionaryFilterTest, RowReaderOptionDefaultValues) {
-  // Test that dictionary filtering is enabled by default
+  // Test that dictionary filtering is disabled by default
   dwio::common::RowReaderOptions options;
-  EXPECT_TRUE(options.isDictionaryFilterEnabled());
+  EXPECT_FALSE(options.isDictionaryFilterEnabled());
 
   // Test disabling dictionary filtering
-  options.setEnableDictionaryFilter(false);
-  EXPECT_FALSE(options.isDictionaryFilterEnabled());
+  options.setEnableDictionaryFilter(true);
+  EXPECT_TRUE(options.isDictionaryFilterEnabled());
 }
 
 TEST_F(DictionaryFilterTest, NonMatchingFilterWithDictionaryFilteringEnabled) {
