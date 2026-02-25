@@ -62,7 +62,7 @@ BUILD_USER ?=
 BUILD_CHANNEL ?=
 # Use commas to separate multiple file systems, such as `hdfs,tos`
 ENABLE_HDFS ?= True
-ENABLE_S3 ?= False
+ENABLE_S3 ?= True
 USE_ARROW_HDFS ?= True
 ENABLE_ASAN ?= False
 LDB_BUILD ?= False

@@ -30,6 +30,7 @@
 
 #include "bolt/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 #include "bolt/common/file/File.h"
+#include "bolt/common/file/FileSystems.h"
 #include "bolt/connectors/hive/HiveConfig.h"
 #include "bolt/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "bolt/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
@@ -79,7 +80,11 @@ class AbfsReadFile::Impl {
             connectStr_, fileSystem_, fileName_));
   }
 
-  void initialize() {
+  void initialize(const FileOptions& options) {
+    // If caller provided file size, trust it and avoid metadata call.
+    if (options.fileSize > 0) {
+      length_ = options.fileSize;
+    }
     if (length_ != -1) {
       return;
     }
@@ -188,8 +193,8 @@ AbfsReadFile::AbfsReadFile(
   impl_ = std::make_shared<Impl>(path, connectStr);
 }
 
-void AbfsReadFile::initialize() {
-  return impl_->initialize();
+void AbfsReadFile::initialize(const FileOptions& options) {
+  return impl_->initialize(options);
 }
 
 std::string_view
@@ -265,10 +270,10 @@ std::string AbfsFileSystem::name() const {
 
 std::unique_ptr<ReadFile> AbfsFileSystem::openFileForRead(
     std::string_view path,
-    const FileOptions& /*unused*/) {
+    const FileOptions& options) {
   auto abfsfile = std::make_unique<AbfsReadFile>(
       std::string(path), impl_->connectionString(std::string(path)));
-  abfsfile->initialize();
+  abfsfile->initialize(options);
   return abfsfile;
 }
 } // namespace bytedance::bolt::filesystems::abfs
