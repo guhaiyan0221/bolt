@@ -61,7 +61,14 @@ class S3ReadFile::Impl {
 
   // Gets the length of the file.
   // Checks if there are any issues reading the file.
-  void initialize() {
+  void initialize(const filesystems::FileOptions& options) {
+    // Use provided file size if available to bypass HEAD request.
+    if (options.fileSize > 0) {
+      length_ = options.fileSize;
+    }
+    if (length_ != -1) {
+      return;
+    }
     Aws::S3::Model::HeadObjectRequest request;
     request.SetBucket(awsString(bucket_));
     request.SetKey(awsString(key_));
@@ -172,8 +179,8 @@ S3ReadFile::S3ReadFile(std::string_view path, Aws::S3::S3Client* client) {
 
 S3ReadFile::~S3ReadFile() = default;
 
-void S3ReadFile::initialize() {
-  return impl_->initialize();
+void S3ReadFile::initialize(const filesystems::FileOptions& options) {
+  return impl_->initialize(options);
 }
 
 std::string_view S3ReadFile::pread(uint64_t offset, uint64_t length, void* buf)

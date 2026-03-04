@@ -31,13 +31,14 @@
 #include <folly/executors/ThreadedExecutor.h>
 #include <folly/futures/Future.h>
 #include "bolt/common/file/File.h"
+#include "bolt/common/file/FileSystems.h"
 #include "bolt/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 namespace bytedance::bolt::filesystems::abfs {
 class AbfsReadFile final : public ReadFile {
  public:
   explicit AbfsReadFile(const std::string& path, const std::string& connectStr);
 
-  void initialize();
+  void initialize(const FileOptions& options);
 
   std::string_view pread(uint64_t offset, uint64_t length, void* buf)
       const final;

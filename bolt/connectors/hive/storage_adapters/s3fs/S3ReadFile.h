@@ -31,6 +31,7 @@
 #pragma once
 
 #include "bolt/common/file/File.h"
+#include "bolt/common/file/FileSystems.h"
 
 namespace Aws::S3 {
 class S3Client;
@@ -66,7 +67,7 @@ class S3ReadFile : public ReadFile {
     return 72 << 20;
   }
 
-  void initialize();
+  void initialize(const filesystems::FileOptions& options);
 
  private:
   void preadInternal(uint64_t offset, uint64_t length, char* position) const;
