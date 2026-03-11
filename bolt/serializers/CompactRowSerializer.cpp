@@ -45,8 +45,10 @@ void CompactRowVectorSerde::estimateSerializedSize(
 namespace {
 class CompactRowVectorSerializer : public RowSerializer<row::CompactRow> {
  public:
-  explicit CompactRowVectorSerializer(memory::MemoryPool* pool)
-      : RowSerializer<row::CompactRow>(pool) {}
+  explicit CompactRowVectorSerializer(
+      memory::MemoryPool* pool,
+      const VectorSerde::Options* options)
+      : RowSerializer<row::CompactRow>(pool, options) {}
 
  private:
   void serializeRanges(
@@ -85,8 +87,9 @@ std::unique_ptr<VectorSerializer> CompactRowVectorSerde::createSerializer(
     RowTypePtr /* type */,
     int32_t /* numRows */,
     StreamArena* streamArena,
-    const Options* /* options */) {
-  return std::make_unique<CompactRowVectorSerializer>(streamArena->pool());
+    const Options* options) {
+  return std::make_unique<CompactRowVectorSerializer>(
+      streamArena->pool(), options);
 }
 
 void CompactRowVectorSerde::deserialize(
@@ -94,12 +97,12 @@ void CompactRowVectorSerde::deserialize(
     bolt::memory::MemoryPool* pool,
     RowTypePtr type,
     RowVectorPtr* result,
-    const Options* /* options */) {
+    const Options* options) {
   std::vector<std::string_view> serializedRows;
   std::vector<std::string> serializedBuffers;
 
   RowDeserializer<std::string_view>::deserialize(
-      source, serializedRows, serializedBuffers);
+      source, serializedRows, serializedBuffers, options);
 
   if (serializedRows.empty()) {
     *result = BaseVector::create<RowVector>(type, 0, pool);

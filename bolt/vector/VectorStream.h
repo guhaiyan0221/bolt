@@ -53,6 +53,21 @@ class CompactRow;
 class UnsafeRowFast;
 } // namespace row
 
+struct CompressionStats {
+  // Number of times compression was not attempted.
+  int32_t numCompressionSkipped{0};
+
+  // Uncompressed size for which compression was attempted.
+  int64_t compressionInputBytes{0};
+
+  // Compressed bytes.
+  int64_t compressedBytes{0};
+
+  // Bytes for which compression was not attempted because of past
+  // non-performance.
+  int64_t compressionSkippedBytes{0};
+};
+
 /// Serializer that can iteratively build up a buffer of serialized rows from
 /// one or more RowVectors.
 ///
@@ -176,9 +191,11 @@ class VectorSerde {
     Options() = default;
     Options(
         bool _useLosslessTimestamp,
-        bytedance::bolt::common::CompressionKind _compressionKind)
+        bytedance::bolt::common::CompressionKind _compressionKind,
+        double _minCompressionRatio = 0.8)
         : useLosslessTimestamp(_useLosslessTimestamp),
-          compressionKind(_compressionKind) {}
+          compressionKind(_compressionKind),
+          minCompressionRatio(_minCompressionRatio) {}
 
     // Currently presto only supports microsecond precision and the serializer
     // converts bolt native timestamp to that resulting in loss of precision.
@@ -187,6 +204,12 @@ class VectorSerde {
     bool useLosslessTimestamp{false};
     bytedance::bolt::common::CompressionKind compressionKind{
         bytedance::bolt::common::CompressionKind::CompressionKind_NONE};
+
+    /// Minimum achieved compression if compression is enabled. Compressing less
+    /// than this causes subsequent compression attempts to be skipped. The more
+    /// times compression misses the target the less frequently it is tried.
+    double minCompressionRatio{
+        0.8}; // Minimum compression ratio to apply compression
     virtual ~Options() {}
   };
 

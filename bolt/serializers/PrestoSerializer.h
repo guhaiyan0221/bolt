@@ -60,8 +60,12 @@ class PrestoVectorSerde : public VectorSerde {
 
     PrestoOptions(
         bool _useLosslessTimestamp,
-        common::CompressionKind _compressionKind)
-        : Options(_useLosslessTimestamp, _compressionKind) {}
+        common::CompressionKind _compressionKind,
+        double _minCompressionRatio = 0.8)
+        : Options(
+              _useLosslessTimestamp,
+              _compressionKind,
+              _minCompressionRatio) {}
 
     /// Specifies the encoding for each of the top-level child vector.
     std::vector<VectorEncoding::Simple> encodings;

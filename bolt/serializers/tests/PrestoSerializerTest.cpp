@@ -105,7 +105,7 @@ class PrestoSerializerTest
         serdeOptions == nullptr ? false : serdeOptions->useLosslessTimestamp;
     common::CompressionKind kind = GetParam();
     serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions{
-        useLosslessTimestamp, kind};
+        useLosslessTimestamp, kind, 0, 8};
     return paramOptions;
   }
 

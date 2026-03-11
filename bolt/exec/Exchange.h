@@ -56,24 +56,7 @@ class Exchange : public SourceOperator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
       std::shared_ptr<ExchangeClient> exchangeClient,
-      const std::string& operatorType = "Exchange")
-      : SourceOperator(
-            driverCtx,
-            exchangeNode->outputType(),
-            operatorId,
-            exchangeNode->id(),
-            operatorType),
-        preferredOutputBatchBytes_{
-            driverCtx->queryConfig().preferredOutputBatchBytes()},
-        processSplits_{operatorCtx_->driverCtx()->driverId == 0},
-        exchangeClient_{std::move(exchangeClient)},
-        options_(
-            false,
-            driverCtx->task->queryCtx()
-                    ->queryConfig()
-                    .isExchangeCompressionEnabled()
-                ? common::CompressionKind::CompressionKind_ZSTD
-                : common::CompressionKind::CompressionKind_NONE) {}
+      const std::string& operatorType = "Exchange");
 
   ~Exchange() override {
     close();
@@ -112,6 +95,8 @@ class Exchange : public SourceOperator {
 
   const uint64_t preferredOutputBatchBytes_;
 
+  const std::unique_ptr<VectorSerde::Options> options_;
+
   /// True if this operator is responsible for fetching splits from the Task and
   /// passing these to ExchangeClient.
   const bool processSplits_;
@@ -128,7 +113,6 @@ class Exchange : public SourceOperator {
   std::vector<std::unique_ptr<SerializedPage>> currentPages_;
   bool atEnd_{false};
   std::default_random_engine rng_{std::random_device{}()};
-  const serializer::presto::PrestoVectorSerde::PrestoOptions options_;
 };
 
 } // namespace bytedance::bolt::exec

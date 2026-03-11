@@ -33,9 +33,19 @@
 namespace bytedance::bolt::exec {
 
 // static
+void OutputBufferManager::initialize(const Options& options) {
+  static std::once_flag flag;
+  std::call_once(flag, [&]() {
+    instance_ = std::make_shared<OutputBufferManager>(options);
+  });
+}
+
+// static
 std::weak_ptr<OutputBufferManager> OutputBufferManager::getInstance() {
-  static auto kInstance = std::make_shared<OutputBufferManager>();
-  return kInstance;
+  static std::once_flag flag;
+  std::call_once(
+      flag, [&]() { instance_ = std::make_shared<OutputBufferManager>(); });
+  return instance_;
 }
 
 std::shared_ptr<OutputBuffer> OutputBufferManager::getBuffer(

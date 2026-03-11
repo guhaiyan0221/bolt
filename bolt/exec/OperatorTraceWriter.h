@@ -69,7 +69,8 @@ class OperatorTraceInputWriter {
   // TODO: make 'useLosslessTimestamp' configurable.
   const serializer::presto::PrestoVectorSerde::PrestoOptions options_ = {
       true,
-      common::CompressionKind::CompressionKind_ZSTD};
+      common::CompressionKind::CompressionKind_ZSTD,
+      0.8};
   const std::shared_ptr<filesystems::FileSystem> fs_;
   memory::MemoryPool* const pool_;
   VectorSerde* serde_;

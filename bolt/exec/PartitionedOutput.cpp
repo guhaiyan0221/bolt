@@ -32,8 +32,39 @@
 #include "bolt/exec/OutputBufferManager.h"
 #include "bolt/exec/Task.h"
 namespace bytedance::bolt::exec {
+namespace {
+std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
+    VectorSerde::Kind kind) {
+  std::unique_ptr<VectorSerde::Options> options =
+      kind == VectorSerde::Kind::kPresto
+      ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
+      : std::make_unique<VectorSerde::Options>();
+  options->compressionKind =
+      OutputBufferManager::getInstance().lock()->compressionKind();
+  options->minCompressionRatio = PartitionedOutput::minCompressionRatio();
+  return options;
+}
+} // namespace
 
 namespace detail {
+Destination::Destination(
+    const std::string& taskId,
+    int destination,
+    VectorSerde* serde,
+    VectorSerde::Options* options,
+    memory::MemoryPool* pool,
+    bool eagerFlush,
+    std::function<void(uint64_t bytes, uint64_t rows)> recordEnqueued)
+    : taskId_(taskId),
+      destination_(destination),
+      serde_(serde),
+      options_(options),
+      pool_(pool),
+      eagerFlush_(eagerFlush),
+      recordEnqueued_(std::move(recordEnqueued)) {
+  setTargetSizePct();
+}
+
 BlockingReason Destination::advance(
     uint64_t maxBytes,
     const std::vector<vector_size_t>& sizes,
@@ -68,7 +99,7 @@ BlockingReason Destination::advance(
   if (!current_) {
     current_ = std::make_unique<VectorStreamGroup>(pool_);
     auto rowType = asRowType(output->type());
-    current_->createStreamTree(rowType, rowsInCurrent_, &options_);
+    current_->createStreamTree(rowType, rowsInCurrent_, options_);
   }
   current_->append(
       output, folly::Range(&rows_[firstRow], rowIdx_ - firstRow), scratch);
@@ -157,7 +188,8 @@ PartitionedOutput::PartitionedOutput(
       compressionKind_(
           ctx->task->queryCtx()->queryConfig().isExchangeCompressionEnabled()
               ? common::CompressionKind_ZSTD
-              : common::CompressionKind_NONE) {
+              : common::CompressionKind_NONE),
+              options_(getVectorSerdeOptions(planNode->serdeKind()) {
   if (!planNode->isPartitioned()) {
     BOLT_USER_CHECK_EQ(numDestinations_, 1);
   }
@@ -201,6 +233,7 @@ void PartitionedOutput::initializeDestinations() {
       destinations_.push_back(std::make_unique<detail::Destination>(
           taskId,
           i,
+          options_.get(),
           pool(),
           eagerFlush_,
           [&](uint64_t bytes, uint64_t rows) {

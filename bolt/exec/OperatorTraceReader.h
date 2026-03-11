@@ -55,7 +55,9 @@ class OperatorTraceInputReader {
   const std::string traceDir_;
   const serializer::presto::PrestoVectorSerde::PrestoOptions readOptions_{
       true,
-      common::CompressionKind_ZSTD};
+      common::CompressionKind_ZSTD,
+      0,
+      8};
 
   const std::shared_ptr<filesystems::FileSystem> fs_;
   const RowTypePtr dataType_;

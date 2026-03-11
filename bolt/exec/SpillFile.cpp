@@ -311,7 +311,7 @@ uint64_t SpillWriter::write(
     MicrosecondTimer timer(&timeUs);
     if (batch_ == nullptr) {
       bytedance::bolt::VectorSerde::Options options = {
-          kDefaultUseLosslessTimestamp, compressionKind_};
+          kDefaultUseLosslessTimestamp, compressionKind_, 0.8};
       batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
       batch_->createStreamTree(
           std::static_pointer_cast<const RowType>(rows->type()),
@@ -370,7 +370,7 @@ uint64_t SpillWriter::writeAndFlush(
     MicrosecondTimer timer(&timeUs);
     if (batch_ == nullptr) {
       bytedance::bolt::VectorSerde::Options options = {
-          kDefaultUseLosslessTimestamp, compressionKind_};
+          kDefaultUseLosslessTimestamp, compressionKind_, 0.8};
       batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
       batch_->createStreamTree(
           std::static_pointer_cast<const RowType>(rows->type()),
@@ -606,7 +606,7 @@ SpillReadFileBase::SpillReadFileBase(
       numSortKeys_(fileInfo.numSortKeys),
       sortCompareFlags_(fileInfo.sortFlags),
       compressionKind_(fileInfo.compressionKind),
-      readOptions_{kDefaultUseLosslessTimestamp, compressionKind_},
+      readOptions_{kDefaultUseLosslessTimestamp, compressionKind_, 0.8},
       serdeKind_(fileInfo.serdeKind),
       serde_(
           serdeKind_.has_value() ? getNamedVectorSerde(*serdeKind_) : nullptr),
