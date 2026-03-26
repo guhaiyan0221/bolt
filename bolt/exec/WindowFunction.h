@@ -97,7 +97,8 @@ class WindowFunction {
   /// partition keys and ordered by the sorting keys of the window.
   /// The WindowPartition object can be used to access the
   /// underlying rows of the partition.
-  virtual void resetPartition(const WindowPartition* partition) = 0;
+  virtual void resetPartition(
+      const WindowPartitionFunctionReader* partition) = 0;
 
   /// This function is invoked by the Window Operator to compute
   /// the window function for a batch of rows.

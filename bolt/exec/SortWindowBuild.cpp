@@ -431,7 +431,7 @@ void SortWindowBuild::loadNextPartitionFromSpill() {
   }
 }
 
-std::shared_ptr<WindowPartition> SortWindowBuild::nextPartition() {
+std::shared_ptr<WindowPartitionExecReader> SortWindowBuild::nextPartition() {
   if (sortMerge_ != nullptr) {
     BOLT_CHECK(!sortRows_.empty(), "No window partitions available");
     auto partition = folly::Range(sortRows_.data(), sortRows_.size());

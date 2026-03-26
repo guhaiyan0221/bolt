@@ -79,7 +79,8 @@ void StreamingWindowBuild::noMoreInput() {
   partitionStartRows_.push_back(sortedRows_.size());
 }
 
-std::shared_ptr<WindowPartition> StreamingWindowBuild::nextPartition() {
+std::shared_ptr<WindowPartitionExecReader>
+StreamingWindowBuild::nextPartition() {
   BOLT_CHECK_GT(partitionStartRows_.size(), 0, "No window partitions available")
 
   currentPartition_++;

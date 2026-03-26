@@ -32,7 +32,7 @@
 #include "bolt/exec/RowToColumnVector.h"
 namespace bytedance::bolt::exec {
 
-WindowPartition::WindowPartition(
+WindowPartitionExecReader::WindowPartitionExecReader(
     RowContainer* data,
     const folly::Range<char**>& rows,
     const std::vector<column_index_t>& inputMapping,
@@ -46,22 +46,49 @@ WindowPartition::WindowPartition(
   }
 }
 
-void WindowPartition::extractColumn(
+void WindowPartitionFunctionCompatibilityReader::extractColumn(
     int32_t columnIndex,
     folly::Range<const vector_size_t*> rowNumbers,
     vector_size_t resultOffset,
     const VectorPtr& result,
     bool exactSize) const {
-  RowContainer::extractColumn(
-      partition_.data(),
-      rowNumbers,
-      columns_[columnIndex],
-      resultOffset,
-      result,
-      exactSize);
+  auto flushRun = [&](vector_size_t runStart, vector_size_t runSize) {
+    extractColumn(
+        columnIndex, runStart, runSize, resultOffset, result, exactSize);
+    resultOffset += runSize;
+  };
+
+  vector_size_t runStart = 0;
+  vector_size_t runSize = 0;
+  for (auto i = 0; i < rowNumbers.size(); ++i) {
+    const auto rowNumber = rowNumbers[i];
+    if (rowNumber < 0) {
+      if (runSize > 0) {
+        flushRun(runStart, runSize);
+        runSize = 0;
+      }
+      result->setNull(resultOffset++, true);
+      continue;
+    }
+    if (runSize == 0) {
+      runStart = rowNumber;
+      runSize = 1;
+      continue;
+    }
+    if (rowNumber == runStart + runSize) {
+      ++runSize;
+      continue;
+    }
+    flushRun(runStart, runSize);
+    runStart = rowNumber;
+    runSize = 1;
+  }
+  if (runSize > 0) {
+    flushRun(runStart, runSize);
+  }
 }
 
-void WindowPartition::extractColumn(
+void WindowPartitionExecReader::extractColumn(
     int32_t columnIndex,
     vector_size_t partitionOffset,
     vector_size_t numRows,
@@ -77,13 +104,13 @@ void WindowPartition::extractColumn(
       exactSize);
 }
 
-void WindowPartition::extractNulls(
+void WindowPartitionExecReader::extractNulls(
     int32_t columnIndex,
     vector_size_t partitionOffset,
     vector_size_t numRows,
     const BufferPtr& nullsBuffer) const {
   RowContainer::extractNulls(
-      partition_.data() + partitionOffset,
+      partition_.data() + partitionOffset - offsetInPartition(),
       numRows,
       columns_[columnIndex],
       nullsBuffer);
@@ -111,7 +138,7 @@ std::pair<vector_size_t, vector_size_t> findMinMaxFrameBounds(
 }; // namespace
 
 std::optional<std::pair<vector_size_t, vector_size_t>>
-WindowPartition::extractNulls(
+WindowPartitionFunctionCompatibilityReader::extractNulls(
     column_index_t col,
     const SelectivityVector& validRows,
     const BufferPtr& frameStarts,
@@ -132,225 +159,6 @@ WindowPartition::extractNulls(
                    : std::nullopt;
 }
 
-bool WindowPartition::compareRowsWithSortKeys(
-    const char* lhs,
-    const char* rhs,
-    RowRowCompare rowCmpRowFunc_) const {
-  if (lhs == rhs) {
-    return false;
-  }
-  for (auto& key : sortKeyInfo_) {
-    if (auto result = data_->compare(
-            lhs,
-            rhs,
-            key.first,
-            {key.second.isNullsFirst(), key.second.isAscending(), false})) {
-      return result < 0;
-    }
-  }
-  return false;
-}
-
-std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
-    vector_size_t start,
-    vector_size_t end,
-    vector_size_t prevPeerStart,
-    vector_size_t prevPeerEnd,
-    vector_size_t* rawPeerStarts,
-    vector_size_t* rawPeerEnds,
-    bool enableJit) const {
-  RowRowCompare rowCmpRowFunc_ = nullptr;
-
-#ifdef ENABLE_BOLT_JIT
-  if (enableJit) {
-    std::vector<column_index_t> sortKeyIndexs;
-    std::vector<CompareFlags> cmpFlags;
-    std::vector<TypePtr> sortKeyTypes;
-    bytedance::bolt::jit::CompiledModuleSP jitModuleRow_;
-    for (auto& key : sortKeyInfo_) {
-      auto columnIndex = key.first;
-      sortKeyIndexs.push_back(columnIndex);
-      sortKeyTypes.push_back(data_->columnTypes()[columnIndex]);
-      cmpFlags.push_back(CompareFlags{
-          key.second.isNullsFirst(), key.second.isAscending(), false});
-    }
-    if (data_ != nullptr && enableJit && RowContainer::JITable(sortKeyTypes)) {
-      if (cmpFlags.empty()) {
-        cmpFlags.resize(sortKeyTypes.size(), CompareFlags());
-      }
-      auto [jitMod, fn] = data_->codegenCompare(
-          sortKeyTypes,
-          cmpFlags,
-          bytedance::bolt::jit::CmpType::CMP_SPILL,
-          true,
-          sortKeyIndexs);
-      jitModuleRow_ = std::move(jitMod);
-      rowCmpRowFunc_ = (RowRowCompare)jitModuleRow_->getFuncPtr(fn);
-    }
-  }
-#endif
-
-  auto peerCompare = [&](const char* lhs, const char* rhs) -> bool {
-    return sortKeyInfo_.size() == 0
-        ? false
-        : compareRowsWithSortKeys(lhs, rhs, rowCmpRowFunc_);
-  };
-
-  BOLT_CHECK_LE(end, numRows());
-
-  auto lastPartitionRow = numRows() - 1;
-  auto peerStart = prevPeerStart;
-  auto peerEnd = prevPeerEnd;
-  for (auto i = start, j = 0; i < end; i++, j++) {
-    // When traversing input partition rows, the peers are the rows
-    // with the same values for the ORDER BY clause. These rows
-    // are equal in some ways and affect the results of ranking functions.
-    // This logic exploits the fact that all rows between the peerStart
-    // and peerEnd have the same values for rawPeerStarts and rawPeerEnds.
-    // So we can compute them just once and reuse across the rows in that peer
-    // interval. Note: peerStart and peerEnd can be maintained across
-    // getOutput calls. Hence, they are returned to the caller.
-
-    if (i == 0 || i >= peerEnd) {
-      // Compute peerStart and peerEnd rows for the first row of the partition
-      // or when past the previous peerGroup.
-      peerStart = i;
-      peerEnd = i;
-      while (peerEnd <= lastPartitionRow) {
-        if (peerCompare(
-                partition_[peerStart - offsetInPartition()],
-                partition_[peerEnd - offsetInPartition()])) {
-          break;
-        }
-        peerEnd++;
-      }
-    }
-
-    rawPeerStarts[j] = peerStart;
-    rawPeerEnds[j] = peerEnd - 1;
-  }
-  return {peerStart, peerEnd};
-}
-
-// Searches for start[frameColumn] in orderByColumn. Depending on
-// preceding or following, this function traverses from start
-// to the respective end of partition looking for the frame value.
-// The current implementation is a very naive sequential search.
-// There are few ideas for future optimizations:
-// i)  The current code traverses from start to param.limit
-//  a single row at a time. This can be improved to skipping
-//  multiple rows.
-// ii) Binary search style.
-// iii) Use cached value of previous row result to start searching
-// from instead of the current start row. Since row values
-// show good locality this could give good results.
-template <typename BoundTest>
-vector_size_t WindowPartition::searchFrameValue(
-    const RangeSearchParams<BoundTest>& params,
-    vector_size_t start,
-    column_index_t orderByColumn,
-    column_index_t frameColumn) const {
-  auto startRow = partition_[start];
-  auto order = sortKeyInfo_[0].second;
-  for (vector_size_t i = start; i >= 0 && i < numRows(); i += params.step) {
-    auto compareResult = data_->compare(
-        partition_[i],
-        startRow,
-        orderByColumn,
-        frameColumn,
-        {order.isNullsFirst(), order.isAscending(), false});
-
-    // The bound value was found. Return if firstMatch required.
-    // If the last match is required, then we need to find the first row that
-    // crosses the bound and return the previous (or following, based on skip)
-    // row.
-    if (compareResult == 0) {
-      if (params.firstMatch) {
-        return i;
-      }
-    }
-
-    // Bound is crossed. Last match needs the previous row.
-    // But for first row matches, this is the first
-    // row that has crossed, but not equals boundary (The equal boundary case
-    // is covered by the condition above). So the bound matches this row itself.
-    if (params.boundTest(compareResult)) {
-      return params.firstMatch ? i : i - params.step;
-    }
-  }
-
-  // Return a row beyond the partition boundary. The logic to determine valid
-  // frames handles the out of bound and empty frames from this value.
-  return params.step == 1 ? numRows() + 1 : -1;
-}
-
-template <typename BoundTest>
-void WindowPartition::updateKRangeFrameBounds(
-    const RangeSearchParams<BoundTest>& params,
-    column_index_t frameColumn,
-    vector_size_t startRow,
-    vector_size_t numRows,
-    const vector_size_t* rawPeerBounds,
-    vector_size_t* rawFrameBounds) const {
-  column_index_t orderByColumn = sortKeyInfo_[0].first;
-  RowColumn frameRowColumn = columns_[frameColumn];
-
-  for (auto i = 0; i < numRows; i++) {
-    auto currentRow = startRow + i;
-    bool frameIsNull = RowContainer::isNullAt(
-        partition_[currentRow],
-        frameRowColumn.nullByte(),
-        frameRowColumn.nullMask());
-    // For NULL values, CURRENT ROW semantics apply. So get frame bound from
-    // peer buffer.
-    if (frameIsNull) {
-      rawFrameBounds[i] = rawPeerBounds[i];
-    } else {
-      // This does a naive search that looks for the frame value from the
-      // current row to the partition boundary in a sequential manner. This
-      // search can be optimized to start from a previously cached row value
-      // instead.
-      rawFrameBounds[i] = searchFrameValue(
-          params, currentRow, orderByColumn, inputMapping_[frameColumn]);
-    }
-  }
-}
-
-void WindowPartition::computeKRangeFrameBounds(
-    bool isStartBound,
-    bool isPreceding,
-    column_index_t frameColumn,
-    vector_size_t startRow,
-    vector_size_t numRows,
-    const vector_size_t* rawPeerBuffer,
-    vector_size_t* rawFrameBounds) const {
-  typedef bool (*boundTest)(int);
-
-  if (isPreceding) {
-    updateKRangeFrameBounds(
-        RangeSearchParams<boundTest>(
-            {!isStartBound,
-             -1,
-             [](int compareResult) -> bool { return compareResult < 0; }}),
-        frameColumn,
-        startRow,
-        numRows,
-        rawPeerBuffer,
-        rawFrameBounds);
-  } else {
-    updateKRangeFrameBounds(
-        RangeSearchParams<boundTest>(
-            {isStartBound,
-             1,
-             [](int compareResult) -> bool { return compareResult > 0; }}),
-        frameColumn,
-        startRow,
-        numRows,
-        rawPeerBuffer,
-        rawFrameBounds);
-  }
-}
-
 template <RowFormat T>
 WindowPartitionImpl<T>::WindowPartitionImpl(
     RowContainer* data,
@@ -358,34 +166,6 @@ WindowPartitionImpl<T>::WindowPartitionImpl(
     const std::vector<column_index_t>& inputMapping,
     const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo)
     : WindowPartition(data, rows, inputMapping, sortKeyInfo) {}
-
-template <RowFormat T>
-void WindowPartitionImpl<T>::extractColumn(
-    int32_t columnIndex,
-    folly::Range<const vector_size_t*> rowNumbers,
-    vector_size_t resultOffset,
-    const VectorPtr& result,
-    bool exactSize) const {
-  if constexpr (T == RowFormat::kRowContainer) {
-    RowContainer::extractColumn(
-        partition_.data(),
-        rowNumbers,
-        columns_[columnIndex],
-        resultOffset,
-        result,
-        exactSize);
-    return;
-  } else if constexpr (T == RowFormat::kSerializedRows) {
-    rowToColumnVector(
-        partition_.data(),
-        rowNumbers,
-        columns_[columnIndex],
-        resultOffset,
-        result);
-    return;
-  }
-  BOLT_FAIL("Unsupported RowFormat!");
-}
 
 template <RowFormat T>
 void WindowPartitionImpl<T>::extractColumn(

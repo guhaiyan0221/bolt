@@ -95,7 +95,7 @@ class SortWindowBuild : public WindowBuild {
 
   bool hasNextPartition() override;
 
-  std::shared_ptr<WindowPartition> nextPartition() override;
+  std::shared_ptr<WindowPartitionExecReader> nextPartition() override;
 
  private:
   struct TopRows {

@@ -124,7 +124,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
     }
   }
 
-  void resetPartition(const exec::WindowPartition* partition) override {
+  void resetPartition(
+      const exec::WindowPartitionFunctionReader* partition) override {
     partition_ = partition;
 
     previousFrameMetadata_.reset();
@@ -413,7 +414,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
   bool aggregateInitialized_{false};
 
   // Current WindowPartition used for accessing rows in the apply method.
-  const exec::WindowPartition* partition_;
+  const exec::WindowPartitionFunctionReader* partition_;
 
   // Args information : their types, column indexes in inputs and vectors
   // used to populate values to pass to the aggregate function.

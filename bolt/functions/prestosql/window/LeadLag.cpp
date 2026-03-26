@@ -52,8 +52,12 @@ class LeadLagFunction : public exec::WindowFunction {
     nulls_ = allocateNulls(0, pool);
   }
 
-  void resetPartition(const exec::WindowPartition* partition) override {
-    partition_ = partition;
+  void resetPartition(
+      const exec::WindowPartitionFunctionReader* partition) override {
+    partition_ =
+        dynamic_cast<const exec::WindowPartitionFunctionCompatibilityReader*>(
+            partition);
+    BOLT_CHECK_NOT_NULL(partition_);
     partitionOffset_ = 0;
     ignoreNullsForPartition_ = false;
 
@@ -561,7 +565,7 @@ class LeadLagFunction : public exec::WindowFunction {
 
   VectorPtr constantTargetValue_;
 
-  const exec::WindowPartition* partition_;
+  const exec::WindowPartitionFunctionCompatibilityReader* partition_;
 
   // Reusable vector of offsets if these are not constant.
   FlatVectorPtr<int64_t> offsets_;

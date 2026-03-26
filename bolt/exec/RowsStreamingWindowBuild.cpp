@@ -313,7 +313,7 @@ void RowsStreamingWindowBuild<needSort>::loadNextPartitionFromSpill() {
 }
 
 template <bool needSort>
-std::shared_ptr<WindowPartition>
+std::shared_ptr<WindowPartitionExecReader>
 RowsStreamingWindowBuild<needSort>::nextPartition() {
   // erase previous partition
   if (outputCurrentPartition_ > 0 &&

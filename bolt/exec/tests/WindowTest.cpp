@@ -28,9 +28,14 @@
  * --------------------------------------------------------------------------
  */
 
+#include <type_traits>
+#include <utility>
+
 #include "bolt/common/base/tests/GTestUtils.h"
 #include "bolt/common/file/FileSystems.h"
 #include "bolt/exec/PlanNodeStats.h"
+#include "bolt/exec/WindowBuild.h"
+#include "bolt/exec/WindowPartition.h"
 #include "bolt/exec/tests/utils/AssertQueryBuilder.h"
 #include "bolt/exec/tests/utils/OperatorTestBase.h"
 #include "bolt/exec/tests/utils/PlanBuilder.h"
@@ -40,6 +45,54 @@ using namespace bytedance::bolt::exec::test;
 namespace bytedance::bolt::exec {
 
 namespace {
+
+static_assert(std::is_base_of_v<
+              WindowPartitionFunctionReader,
+              WindowPartitionExecReader>);
+static_assert(std::is_base_of_v<WindowPartitionExecReader, WindowPartition>);
+static_assert(std::is_same_v<
+              decltype(std::declval<WindowBuild&>().nextPartition()),
+              std::shared_ptr<WindowPartitionExecReader>>);
+
+template <typename T>
+concept HasComputePeerBuffers =
+    requires(T& reader, vector_size_t* peerStarts, vector_size_t* peerEnds) {
+  reader.computePeerBuffers(0, 0, 0, 0, peerStarts, peerEnds, false);
+};
+
+template <typename T>
+concept HasComputeKRangeFrameBounds = requires(
+    T& reader,
+    const vector_size_t* peerStarts,
+    vector_size_t* frameBounds) {
+  reader.computeKRangeFrameBounds(true, true, 0, 0, 0, peerStarts, frameBounds);
+};
+
+template <typename T>
+concept HasSparseExtractColumn = requires(
+    T& reader,
+    const vector_size_t* rowNumbers,
+    const VectorPtr& result) {
+  reader.extractColumn(0, folly::Range(rowNumbers, 1), 0, result);
+};
+
+template <typename T>
+concept HasFrameExtractNulls = requires(
+    T& reader,
+    const SelectivityVector& validRows,
+    const BufferPtr& frameStarts,
+    const BufferPtr& frameEnds,
+    BufferPtr* nulls) {
+  reader.extractNulls(0, validRows, frameStarts, frameEnds, nulls);
+};
+
+static_assert(!HasComputePeerBuffers<WindowPartitionExecReader>);
+static_assert(!HasComputeKRangeFrameBounds<WindowPartitionExecReader>);
+static_assert(!HasSparseExtractColumn<WindowPartitionFunctionReader>);
+static_assert(!HasFrameExtractNulls<WindowPartitionFunctionReader>);
+static_assert(std::is_base_of_v<
+              WindowPartitionFunctionReader,
+              WindowPartitionFunctionCompatibilityReader>);
 
 class WindowTest : public OperatorTestBase {
  public:

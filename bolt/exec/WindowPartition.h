@@ -39,11 +39,56 @@
 /// TODO: This implementation will be revised for Spill to disk semantics.
 namespace bytedance::bolt::exec {
 
-class WindowPartition {
+class WindowPartitionFunctionReader {
  public:
-  /// The WindowPartition is used by the Window operator and WindowFunction
-  /// objects to access the underlying data and columns of a partition of rows.
-  /// The WindowPartition is constructed by WindowBuild from the input data.
+  virtual ~WindowPartitionFunctionReader() = default;
+
+  virtual vector_size_t numRows() const = 0;
+
+  virtual void extractColumn(
+      int32_t columnIndex,
+      vector_size_t partitionOffset,
+      vector_size_t numRows,
+      vector_size_t resultOffset,
+      const VectorPtr& result,
+      bool exactSize = false) const = 0;
+
+  virtual void extractNulls(
+      int32_t columnIndex,
+      vector_size_t partitionOffset,
+      vector_size_t numRows,
+      const BufferPtr& nullsBuffer) const = 0;
+};
+
+class WindowPartitionFunctionCompatibilityReader
+    : public WindowPartitionFunctionReader {
+ public:
+  virtual ~WindowPartitionFunctionCompatibilityReader() = default;
+
+  using WindowPartitionFunctionReader::extractColumn;
+  using WindowPartitionFunctionReader::extractNulls;
+
+  void extractColumn(
+      int32_t columnIndex,
+      folly::Range<const vector_size_t*> rowNumbers,
+      vector_size_t resultOffset,
+      const VectorPtr& result,
+      bool exactSize = false) const;
+
+  std::optional<std::pair<vector_size_t, vector_size_t>> extractNulls(
+      column_index_t col,
+      const SelectivityVector& validRows,
+      const BufferPtr& frameStarts,
+      const BufferPtr& frameEnds,
+      BufferPtr* nulls) const;
+};
+
+class WindowPartitionExecReader
+    : public WindowPartitionFunctionCompatibilityReader {
+ public:
+  /// The WindowPartitionExecReader is used by the Window operator to access the
+  /// underlying data and columns of a partition of rows. The reader is
+  /// constructed by WindowBuild from the input data.
   /// 'data' : Underlying RowContainer of the WindowBuild.
   /// 'rows' : Pointers to rows in the RowContainer belonging to this partition.
   /// 'inputMapping' : Mapping from Window input column to the column position
@@ -51,14 +96,17 @@ class WindowPartition {
   /// the columns in 'data' for use with the spiller.
   /// 'sortKeyInfo' : Order by columns used by the the Window operator. Used to
   /// get peer rows from the input partition.
-  WindowPartition(
+  WindowPartitionExecReader(
       RowContainer* data,
       const folly::Range<char**>& rows,
       const std::vector<column_index_t>& inputMapping,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo);
 
-  virtual ~WindowPartition() = default;
+  virtual ~WindowPartitionExecReader() = default;
+
+  using WindowPartitionFunctionCompatibilityReader::extractColumn;
+  using WindowPartitionFunctionCompatibilityReader::extractNulls;
 
   /// Returns the number of rows in the current WindowPartition.
   virtual vector_size_t numRows() const {
@@ -75,6 +123,89 @@ class WindowPartition {
   virtual bool supportRowsStreaming() const {
     return false;
   }
+
+  // Builds the next set of available rows on the consumer side.
+  virtual bool buildNextRows() {
+    return false;
+  }
+
+  // Determines if the current partition is complete and then proceed to the
+  // next partition.
+  virtual bool processFinished() const {
+    return true;
+  }
+
+  /// Copies the values at 'columnIndex' into 'result' (starting at
+  /// 'resultOffset') for 'numRows' starting at positions 'partitionOffset'
+  /// in the partition input data.
+  void extractColumn(
+      int32_t columnIndex,
+      vector_size_t partitionOffset,
+      vector_size_t numRows,
+      vector_size_t resultOffset,
+      const VectorPtr& result,
+      bool exactSize = false) const override;
+
+  /// Extracts null positions at 'columnIndex' into 'nullsBuffer' for
+  /// 'numRows' starting at positions 'partitionOffset' in the partition
+  /// input data.
+  void extractNulls(
+      int32_t columnIndex,
+      vector_size_t partitionOffset,
+      vector_size_t numRows,
+      const BufferPtr& nullsBuffer) const override;
+
+  virtual bool isSpilled() {
+    return false;
+  }
+
+  virtual bool getBatch(RowVectorPtr& output, bool& isEnd) {
+    return false;
+  }
+
+  virtual void getWindowFunctionResults(
+      VectorPtr& result,
+      int32_t numOutputRows,
+      int32_t functionIndex,
+      bool isAggregateWindowFunc) {
+    BOLT_UNREACHABLE();
+  }
+
+ protected:
+  // The RowContainer associated with the partition.
+  // It is owned by the WindowBuild that creates the partition.
+  RowContainer* data_;
+
+  // folly::Range is for the partition rows iterator provided by the
+  // Window operator. The pointers are to rows from a RowContainer owned
+  // by the operator. We can assume these are valid values for the lifetime
+  // of WindowPartition.
+  folly::Range<char**> partition_;
+
+  // Mapping from window input column -> index in data_. This is required
+  // because the WindowBuild reorders data_ to place partition and sort keys
+  // before other columns in data_. But the Window Operator and Function code
+  // accesses WindowPartition using the indexes of Window input type.
+  const std::vector<column_index_t> inputMapping_;
+
+  // ORDER BY column info for this partition.
+  const std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
+
+  // Copy of the input RowColumn objects that are used for
+  // accessing the partition row columns. These RowColumn objects
+  // index into RowContainer data_ above and can retrieve the column values.
+  // The order of these columns is the same as that of the input row
+  // of the Window operator. The WindowFunctions know the
+  // corresponding indexes of their input arguments into this vector.
+  // They will request for column vector values at the respective index.
+  std::vector<exec::RowColumn> columns_;
+};
+
+class WindowPartition : public WindowPartitionExecReader {
+ public:
+  using WindowPartitionExecReader::WindowPartitionExecReader;
+
+  ~WindowPartition() override = default;
 
   // Sets the flag indicating that all input rows have been processed on the
   // producer side.
@@ -114,194 +245,9 @@ class WindowPartition {
     return;
   }
 
-  // Builds the next set of available rows on the consumer side.
-  virtual bool buildNextRows() {
-    return false;
-  }
-
   virtual void erasePartition() {
     return;
   }
-
-  // Determines if the current partition is complete and then proceed to the
-  // next partition.
-  virtual bool processFinished() const {
-    return true;
-  }
-
-  /// Copies the values at 'columnIndex' into 'result' (starting at
-  /// 'resultOffset') for the rows at positions in the 'rowNumbers'
-  /// array from the partition input data.
-  virtual void extractColumn(
-      int32_t columnIndex,
-      folly::Range<const vector_size_t*> rowNumbers,
-      vector_size_t resultOffset,
-      const VectorPtr& result,
-      bool exactSize = false) const;
-
-  /// Copies the values at 'columnIndex' into 'result' (starting at
-  /// 'resultOffset') for 'numRows' starting at positions 'partitionOffset'
-  /// in the partition input data.
-  virtual void extractColumn(
-      int32_t columnIndex,
-      vector_size_t partitionOffset,
-      vector_size_t numRows,
-      vector_size_t resultOffset,
-      const VectorPtr& result,
-      bool exactSize = false) const;
-
-  /// Extracts null positions at 'columnIndex' into 'nullsBuffer' for
-  /// 'numRows' starting at positions 'partitionOffset' in the partition
-  /// input data.
-  void extractNulls(
-      int32_t columnIndex,
-      vector_size_t partitionOffset,
-      vector_size_t numRows,
-      const BufferPtr& nullsBuffer) const;
-
-  /// Extracts null positions at 'col' into 'nulls'. The null positions
-  /// are from the smallest 'frameStarts' value to the greatest 'frameEnds'
-  /// value for 'validRows'. Both 'frameStarts' and 'frameEnds' are buffers
-  /// of type vector_size_t.
-  /// The returned value is an optional pair of vector_size_t.
-  /// The pair is returned only if null values are found in the nulls
-  /// extracted. The first value of the pair is the smallest frameStart for
-  /// nulls. The second is the number of frames extracted.
-  std::optional<std::pair<vector_size_t, vector_size_t>> extractNulls(
-      column_index_t col,
-      const SelectivityVector& validRows,
-      const BufferPtr& frameStarts,
-      const BufferPtr& frameEnds,
-      BufferPtr* nulls) const;
-
-  /// Sets in 'rawPeerStarts' and in 'rawPeerEnds' the peer start and peer end
-  /// offsets of the rows between 'start' and 'end' of the current partition.
-  /// 'peer' row are all the rows having the same value of the order by columns
-  /// as the current row.
-  /// computePeerBuffers is called multiple times for each partition. It is
-  /// called in sequential order of start to end rows.
-  /// The peerStarts/peerEnds of the startRow could be same as the last row in
-  /// the previous call to computePeerBuffers (if they have the same order by
-  /// keys). So peerStart and peerEnd of the last row of this call are returned
-  /// to be passed as prevPeerStart and prevPeerEnd to the subsequent
-  /// call to computePeerBuffers.
-  virtual std::pair<vector_size_t, vector_size_t> computePeerBuffers(
-      vector_size_t start,
-      vector_size_t end,
-      vector_size_t prevPeerStart,
-      vector_size_t prevPeerEnd,
-      vector_size_t* rawPeerStarts,
-      vector_size_t* rawPeerEnds,
-      bool enableJit = false) const;
-
-  /// Sets in 'rawFrameBounds' the frame boundary for the k range
-  /// preceding/following frame.
-  /// @param isStartBound start or end boundary of the frame.
-  /// @param isPreceding preceding or following boundary.
-  /// @param frameColumn column which has the range boundary for that row.
-  /// @param startRow starting row in the partition for this buffer computation.
-  /// @param numRows number of rows to compute buffer for.
-  /// @param rawPeerStarts buffer of peer row values for each row. If the frame
-  /// column is null, then its peer row value is the frame boundary.
-  virtual void computeKRangeFrameBounds(
-      bool isStartBound,
-      bool isPreceding,
-      column_index_t frameColumn,
-      vector_size_t startRow,
-      vector_size_t numRows,
-      const vector_size_t* rawPeerStarts,
-      vector_size_t* rawFrameBounds) const;
-
-  virtual bool isSpilled() {
-    return false;
-  }
-
-  virtual bool getBatch(RowVectorPtr& output, bool& isEnd) {
-    return false;
-  }
-
-  virtual void getWindowFunctionResults(
-      VectorPtr& result,
-      int32_t numOutputRows,
-      int32_t functionIndex,
-      bool isAggregateWindowFunc) {
-    BOLT_UNREACHABLE();
-  }
-
-  template <typename BoundTest>
-  struct RangeSearchParams {
-    // Determines if the range search should return the first row matching the
-    // frame bound or the last row matching it. firstMatch depends on start or
-    // end bound search semantics.
-    bool firstMatch;
-
-    // Number of rows incremented when searching the range value.
-    // It is +1 for searching following rows, and -1 for searching preceding
-    // rows.
-    int32_t step;
-
-    // Checks if the comparison result (between the order by value and the
-    // frame value) satisfies the frame bound. If it returns true, that means
-    // the frame bound is crossed. This is required because the order by
-    // column for the range search could be ascending or descending. The
-    // comparison result is considered as crossing the boundary based on this
-    // directionality.
-    BoundTest boundTest;
-  };
-
- private:
-  virtual bool compareRowsWithSortKeys(
-      const char* lhs,
-      const char* rhs,
-      RowRowCompare rowCmpRowFunc_ = nullptr) const;
-
-  // Searches for frameColumn[startRow] in orderByColumn[startRow+-]
-  // preceding or following based on the range search params.
-  template <typename BoundTest>
-  vector_size_t searchFrameValue(
-      const RangeSearchParams<BoundTest>& params,
-      vector_size_t startRow,
-      column_index_t orderByColumn,
-      column_index_t frameColumn) const;
-
-  // Iterates over 'numRows' and searches frame value for each row.
-  template <typename BoundTest>
-  void updateKRangeFrameBounds(
-      const RangeSearchParams<BoundTest>& params,
-      column_index_t frameColumn,
-      vector_size_t startRow,
-      vector_size_t numRows,
-      const vector_size_t* rawPeerBuffer,
-      vector_size_t* rawFrameBounds) const;
-
- protected:
-  // The RowContainer associated with the partition.
-  // It is owned by the WindowBuild that creates the partition.
-  RowContainer* data_;
-
-  // folly::Range is for the partition rows iterator provided by the
-  // Window operator. The pointers are to rows from a RowContainer owned
-  // by the operator. We can assume these are valid values for the lifetime
-  // of WindowPartition.
-  folly::Range<char**> partition_;
-
-  // Mapping from window input column -> index in data_. This is required
-  // because the WindowBuild reorders data_ to place partition and sort keys
-  // before other columns in data_. But the Window Operator and Function code
-  // accesses WindowPartition using the indexes of Window input type.
-  const std::vector<column_index_t> inputMapping_;
-
-  // ORDER BY column info for this partition.
-  const std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
-
-  // Copy of the input RowColumn objects that are used for
-  // accessing the partition row columns. These RowColumn objects
-  // index into RowContainer data_ above and can retrieve the column values.
-  // The order of these columns is the same as that of the input row
-  // of the Window operator. The WindowFunctions know the
-  // corresponding indexes of their input arguments into this vector.
-  // They will request for column vector values at the respective index.
-  std::vector<exec::RowColumn> columns_;
 };
 
 enum class RowFormat { kRowContainer, kSerializedRows };
@@ -316,15 +262,7 @@ class WindowPartitionImpl : public WindowPartition {
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo);
 
-  /// Copies the values at 'columnIndex' into 'result' (starting at
-  /// 'resultOffset') for the rows at positions in the 'rowNumbers'
-  /// array from the partition input data.
-  void extractColumn(
-      int32_t columnIndex,
-      folly::Range<const vector_size_t*> rowNumbers,
-      vector_size_t resultOffset,
-      const VectorPtr& result,
-      bool exactSize = false) const override;
+  using WindowPartitionExecReader::extractColumn;
 
   void extractColumn(
       int32_t columnIndex,
@@ -334,10 +272,17 @@ class WindowPartitionImpl : public WindowPartition {
       const VectorPtr& result,
       bool exactSize = false) const override;
 
+  template <typename BoundTest>
+  struct RangeSearchParams {
+    bool firstMatch;
+    int32_t step;
+    BoundTest boundTest;
+  };
+
   bool compareRowsWithSortKeys(
       const char* lhs,
       const char* rhs,
-      RowRowCompare rowCmpRowFunc_ = nullptr) const override;
+      RowRowCompare rowCmpRowFunc_ = nullptr) const;
 
   /// Sets in 'rawFrameBounds' the frame boundary for the k range
   /// preceding/following frame.
@@ -355,7 +300,7 @@ class WindowPartitionImpl : public WindowPartition {
       vector_size_t startRow,
       vector_size_t numRows,
       const vector_size_t* rawPeerStarts,
-      vector_size_t* rawFrameBounds) const override;
+      vector_size_t* rawFrameBounds) const;
 
   // Iterates over 'numRows' and searches frame value for each row.
   template <typename BoundTest>

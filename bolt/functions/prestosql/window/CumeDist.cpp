@@ -40,7 +40,8 @@ class CumeDistFunction : public exec::WindowFunction {
  public:
   explicit CumeDistFunction() : WindowFunction(DOUBLE(), nullptr, nullptr) {}
 
-  void resetPartition(const exec::WindowPartition* partition) override {
+  void resetPartition(
+      const exec::WindowPartitionFunctionReader* partition) override {
     runningTotal_ = 0;
     cumeDist_ = 0;
     currentPeerGroupStart_ = -1;

@@ -72,14 +72,15 @@ Window::Window(
                      : std::nullopt)),
       numInputColumns_(windowNode->inputType()->size()),
       stringAllocator_(pool()),
-      windowNode_(windowNode),
-      currentPartition_(nullptr) {
+      windowNode_(windowNode) {
   enableJit_ = driverCtx->queryConfig().enableJitRowCmpRow();
   const auto numPartitionKeys = windowNode->partitionKeys().size();
   const auto numSortingKeys = windowNode->sortingKeys().size();
   for (auto i = 0; i < numSortingKeys; ++i) {
     sortKeyInfo_.push_back(
         std::make_pair(numPartitionKeys + i, windowNode->sortingOrders()[i]));
+    sortKeyChannels_.push_back(exprToChannel(
+        windowNode->sortingKeys()[i].get(), windowNode->inputType()));
   }
 
   auto* spillConfig =
@@ -526,20 +527,183 @@ void Window::noMoreInput() {
   windowBuild_->noMoreInput();
 }
 
-void Window::callResetPartition() {
+bool Window::prepareNextPartition() {
   MicrosecondTimer timer(&extractColumnTimeUs_);
-  partitionOffset_ = 0;
-  peerStartRow_ = 0;
-  peerEndRow_ = 0;
-  currentPartition_ = nullptr;
-  bool hasNextPartition = false;
-  hasNextPartition = windowBuild_->hasNextPartition();
+  partitionState_.reset();
+  if (!windowBuild_->hasNextPartition()) {
+    return false;
+  }
 
-  if (hasNextPartition) {
-    currentPartition_ = windowBuild_->nextPartition();
-    for (int i = 0; i < windowFunctions_.size(); i++) {
-      windowFunctions_[i]->resetPartition(currentPartition_.get());
+  partitionState_.partition = windowBuild_->nextPartition();
+  for (int i = 0; i < windowFunctions_.size(); i++) {
+    windowFunctions_[i]->resetPartition(partitionState_.partition.get());
+  }
+  return true;
+}
+
+const VectorPtr& Window::projectedPartitionColumn(column_index_t columnIndex) {
+  BOLT_DCHECK_NOT_NULL(partitionState_.partition);
+  if (partitionState_.projectedColumns.empty()) {
+    partitionState_.projectedColumns.resize(numInputColumns_);
+  }
+
+  auto& column = partitionState_.projectedColumns[columnIndex];
+  if (column == nullptr ||
+      column->size() != partitionState_.partition->numRows()) {
+    const auto partitionOffset = partitionState_.partition->offsetInPartition();
+    const auto visibleRows =
+        partitionState_.partition->numRows() - partitionOffset;
+    column = BaseVector::create(
+        outputType_->childAt(columnIndex),
+        partitionState_.partition->numRows(),
+        operatorCtx_->pool());
+    if (visibleRows > 0) {
+      partitionState_.partition->extractColumn(
+          columnIndex,
+          partitionOffset,
+          visibleRows,
+          partitionOffset,
+          column,
+          true);
     }
+  }
+  return column;
+}
+
+bool Window::compareRowsWithSortKeys(
+    vector_size_t lhsRow,
+    vector_size_t rhsRow) {
+  if (lhsRow == rhsRow || sortKeyChannels_.empty()) {
+    return false;
+  }
+
+  for (auto i = 0; i < sortKeyChannels_.size(); ++i) {
+    const auto& keyColumn = projectedPartitionColumn(sortKeyChannels_[i]);
+    auto compareResult = keyColumn->compare(
+        keyColumn.get(),
+        lhsRow,
+        rhsRow,
+        {sortKeyInfo_[i].second.isNullsFirst(),
+         sortKeyInfo_[i].second.isAscending(),
+         false});
+    BOLT_DCHECK(compareResult.has_value());
+    if (*compareResult != 0) {
+      return *compareResult < 0;
+    }
+  }
+  return false;
+}
+
+std::pair<vector_size_t, vector_size_t> Window::computePeerBuffers(
+    vector_size_t start,
+    vector_size_t end,
+    vector_size_t prevPeerStart,
+    vector_size_t prevPeerEnd,
+    vector_size_t* rawPeerStarts,
+    vector_size_t* rawPeerEnds) {
+  BOLT_DCHECK_NOT_NULL(partitionState_.partition);
+  BOLT_CHECK_LE(end, partitionState_.partition->numRows());
+
+  const auto lastPartitionRow = partitionState_.partition->numRows() - 1;
+  auto peerStart = prevPeerStart;
+  auto peerEnd = prevPeerEnd;
+  for (auto i = start, j = 0; i < end; ++i, ++j) {
+    if (i == 0 || i >= peerEnd) {
+      peerStart = i;
+      peerEnd = i;
+      while (peerEnd <= lastPartitionRow) {
+        if (compareRowsWithSortKeys(peerStart, peerEnd)) {
+          break;
+        }
+        ++peerEnd;
+      }
+    }
+
+    rawPeerStarts[j] = peerStart;
+    rawPeerEnds[j] = peerEnd - 1;
+  }
+  return {peerStart, peerEnd};
+}
+
+vector_size_t Window::searchFrameValue(
+    const RangeSearchParams& params,
+    vector_size_t startRow,
+    column_index_t orderByColumn,
+    column_index_t frameColumn) {
+  BOLT_DCHECK_NOT_NULL(partitionState_.partition);
+  const auto& orderByColumnVector = projectedPartitionColumn(orderByColumn);
+  const auto& frameColumnVector = projectedPartitionColumn(frameColumn);
+  const auto order = sortKeyInfo_[0].second;
+  for (vector_size_t i = startRow;
+       i >= 0 && i < partitionState_.partition->numRows();
+       i += params.step) {
+    auto compareResult = orderByColumnVector->compare(
+        frameColumnVector.get(),
+        i,
+        startRow,
+        {order.isNullsFirst(), order.isAscending(), false});
+    BOLT_DCHECK(compareResult.has_value());
+
+    if (*compareResult == 0 && params.firstMatch) {
+      return i;
+    }
+
+    const bool crossed =
+        params.boundaryDirection < 0 ? *compareResult < 0 : *compareResult > 0;
+    if (crossed) {
+      return params.firstMatch ? i : i - params.step;
+    }
+  }
+
+  return params.step == 1 ? partitionState_.partition->numRows() + 1 : -1;
+}
+
+void Window::updateKRangeFrameBounds(
+    const RangeSearchParams& params,
+    column_index_t frameColumn,
+    vector_size_t startRow,
+    vector_size_t numRows,
+    const vector_size_t* rawPeerBuffer,
+    vector_size_t* rawFrameBounds) {
+  BOLT_DCHECK(!sortKeyChannels_.empty());
+  const auto& frameColumnVector = projectedPartitionColumn(frameColumn);
+  const auto orderByColumn = sortKeyChannels_[0];
+
+  for (auto i = 0; i < numRows; ++i) {
+    const auto currentRow = startRow + i;
+    if (frameColumnVector->isNullAt(currentRow)) {
+      rawFrameBounds[i] = rawPeerBuffer[i];
+    } else {
+      rawFrameBounds[i] =
+          searchFrameValue(params, currentRow, orderByColumn, frameColumn);
+    }
+  }
+}
+
+void Window::computeKRangeFrameBounds(
+    bool isStartBound,
+    bool isPreceding,
+    column_index_t frameColumn,
+    vector_size_t startRow,
+    vector_size_t numRows,
+    const vector_size_t* rawPeerBuffer,
+    vector_size_t* rawFrameBounds) {
+  if (isPreceding) {
+    updateKRangeFrameBounds(
+        RangeSearchParams{!isStartBound, -1, -1},
+        frameColumn,
+        startRow,
+        numRows,
+        rawPeerBuffer,
+        rawFrameBounds);
+  } else {
+    updateKRangeFrameBounds(
+        RangeSearchParams{isStartBound, 1, 1},
+        frameColumn,
+        startRow,
+        numRows,
+        rawPeerBuffer,
+        rawFrameBounds);
   }
 }
 
@@ -623,8 +787,12 @@ void Window::updateKRowsFrameBounds(
     }
     std::iota(rawFrameBounds, rawFrameBounds + numRows, startValue);
   } else {
-    currentPartition_->extractColumn(
-        frameArg.index, partitionOffset_, numRows, 0, frameArg.value);
+    partitionState_.partition->extractColumn(
+        frameArg.index,
+        partitionState_.partitionOffset,
+        numRows,
+        0,
+        frameArg.value);
     if (frameArg.value->typeKind() == TypeKind::INTEGER) {
       updateKRowsOffsetsColumn<int32_t>(
           isKPreceding, frameArg.value, startRow, numRows, rawFrameBounds);
@@ -654,7 +822,8 @@ void Window::updateFrameBounds(
       std::fill_n(rawFrameBounds, numRows, 0);
       break;
     case core::WindowNode::BoundType::kUnboundedFollowing:
-      std::fill_n(rawFrameBounds, numRows, currentPartition_->numRows() - 1);
+      std::fill_n(
+          rawFrameBounds, numRows, partitionState_.partition->numRows() - 1);
       break;
     case core::WindowNode::BoundType::kCurrentRow: {
       if (windowType == core::WindowNode::WindowType::kRange) {
@@ -672,7 +841,7 @@ void Window::updateFrameBounds(
         updateKRowsFrameBounds(
             true, frameArg.value(), startRow, numRows, rawFrameBounds);
       } else {
-        currentPartition_->computeKRangeFrameBounds(
+        computeKRangeFrameBounds(
             isStartBound,
             true,
             frameArg.value().index,
@@ -688,7 +857,7 @@ void Window::updateFrameBounds(
         updateKRowsFrameBounds(
             false, frameArg.value(), startRow, numRows, rawFrameBounds);
       } else {
-        currentPartition_->computeKRangeFrameBounds(
+        computeKRangeFrameBounds(
             isStartBound,
             false,
             frameArg.value().index,
@@ -766,14 +935,14 @@ void Window::computePeerAndFrameBuffers(
     rawFrameEnds.push_back(rawFrameEnd);
   }
 
-  std::tie(peerStartRow_, peerEndRow_) = currentPartition_->computePeerBuffers(
-      startRow,
-      endRow,
-      peerStartRow_,
-      peerEndRow_,
-      rawPeerStarts,
-      rawPeerEnds,
-      enableJit);
+  std::tie(partitionState_.peerStartRow, partitionState_.peerEndRow) =
+      computePeerBuffers(
+          startRow,
+          endRow,
+          partitionState_.peerStartRow,
+          partitionState_.peerEndRow,
+          rawPeerStarts,
+          rawPeerEnds);
   for (auto i = 0; i < numFuncs; i++) {
     const auto& windowFrame = windowFrames_[i];
     // Default all rows to have validFrames. The invalidity of frames is only
@@ -803,7 +972,7 @@ void Window::computePeerAndFrameBuffers(
       // Ranking functions do not care about frames. So the function decides
       // further what to do with empty frames.
       computeValidFrames(
-          currentPartition_->numRows() - 1,
+          partitionState_.partition->numRows() - 1,
           numRows,
           rawFrameStarts[i],
           rawFrameEnds[i],
@@ -819,8 +988,12 @@ void Window::getInputColumns(
     const RowVectorPtr& result) {
   auto numRows = endRow - startRow;
   for (int i = 0; i < numInputColumns_; ++i) {
-    currentPartition_->extractColumn(
-        i, partitionOffset_, numRows, resultOffset, result->childAt(i));
+    partitionState_.partition->extractColumn(
+        i,
+        partitionState_.partitionOffset,
+        numRows,
+        resultOffset,
+        result->childAt(i));
   }
 }
 
@@ -845,7 +1018,7 @@ void Window::callApplyForPartitionRows(
 
   vector_size_t numRows = endRow - startRow;
   numProcessedRows_ += numRows;
-  partitionOffset_ += numRows;
+  partitionState_.partitionOffset += numRows;
 }
 
 vector_size_t Window::callApplyLoop(
@@ -856,47 +1029,49 @@ vector_size_t Window::callApplyLoop(
   vector_size_t resultIndex = 0;
   vector_size_t numOutputRowsLeft = numOutputRows;
 
-  // This function requires that the currentPartition_ is available for
+  // This function requires that the partitionState_.partition is available for
   // output.
-  BOLT_DCHECK_NOT_NULL(currentPartition_);
+  BOLT_DCHECK_NOT_NULL(partitionState_.partition);
   while (numOutputRowsLeft > 0) {
     // SpillableWindowBuild can not be handled by callApplyLoop.
-    if (isSpillableWindowBuild_ && currentPartition_->isSpilled()) {
+    if (isSpillableWindowBuild_ && partitionState_.partition->isSpilled()) {
       break;
     }
     auto rowsForCurrentPartition =
-        currentPartition_->numRows() - partitionOffset_;
+        partitionState_.partition->numRows() - partitionState_.partitionOffset;
     if (rowsForCurrentPartition <= numOutputRowsLeft) {
       // Current partition can fit completely in the output buffer.
       // So output all its rows.
       callApplyForPartitionRows(
-          partitionOffset_,
-          partitionOffset_ + rowsForCurrentPartition,
+          partitionState_.partitionOffset,
+          partitionState_.partitionOffset + rowsForCurrentPartition,
           resultIndex,
           result);
       resultIndex += rowsForCurrentPartition;
       numOutputRowsLeft -= rowsForCurrentPartition;
-      if (currentPartition_->supportRowsStreaming()) {
-        if (currentPartition_->processFinished()) {
-          callResetPartition();
-          if (currentPartition_ &&
-              partitionOffset_ == currentPartition_->numRows()) {
-            if (!currentPartition_->buildNextRows()) {
+      if (partitionState_.partition->supportRowsStreaming()) {
+        if (partitionState_.partition->processFinished()) {
+          prepareNextPartition();
+          if (partitionState_.partition &&
+              partitionState_.partitionOffset ==
+                  partitionState_.partition->numRows()) {
+            if (!partitionState_.partition->buildNextRows()) {
               windowBuild_->loadNextPartialPartitionFromSpill();
               break;
             }
+            partitionState_.projectedColumns.clear();
           }
 
         } else {
           // Break until the next getOutput call to handle the remaining data
-          // in currentPartition_.
+          // in partitionState_.partition.
           break;
         }
       } else {
-        callResetPartition();
+        prepareNextPartition();
       }
 
-      if (!currentPartition_) {
+      if (!partitionState_.partition) {
         // The WindowBuild doesn't have any more partitions to process right
         // now. So break until the next getOutput call.
         break;
@@ -906,8 +1081,8 @@ vector_size_t Window::callApplyLoop(
       // Call apply for the rows that can fit in the buffer and break from
       // outputting.
       callApplyForPartitionRows(
-          partitionOffset_,
-          partitionOffset_ + numOutputRowsLeft,
+          partitionState_.partitionOffset,
+          partitionState_.partitionOffset + numOutputRowsLeft,
           resultIndex,
           result);
       numOutputRowsLeft = 0;
@@ -939,9 +1114,9 @@ RowVectorPtr Window::getOutput() {
     return nullptr;
   }
 
-  if (!currentPartition_) {
-    callResetPartition();
-    if (!currentPartition_) {
+  if (!partitionState_.partition) {
+    prepareNextPartition();
+    if (!partitionState_.partition) {
       // WindowBuild doesn't have a partition to output.
       if (isFinished()) {
         windowBuild_->finish();
@@ -950,16 +1125,17 @@ RowVectorPtr Window::getOutput() {
     }
   }
 
-  if (isSpillableWindowBuild_ && currentPartition_->isSpilled()) {
+  if (isSpillableWindowBuild_ && partitionState_.partition->isSpilled()) {
     return getOutputFromSpilledPartition();
   }
 
-  if (currentPartition_->supportRowsStreaming() &&
-      partitionOffset_ == currentPartition_->numRows()) {
-    if (!currentPartition_->buildNextRows()) {
+  if (partitionState_.partition->supportRowsStreaming() &&
+      partitionState_.partitionOffset == partitionState_.partition->numRows()) {
+    if (!partitionState_.partition->buildNextRows()) {
       windowBuild_->loadNextPartialPartitionFromSpill();
       return nullptr;
     }
+    partitionState_.projectedColumns.clear();
   }
 
   auto numOutputRows = std::min(numRowsPerOutput_, numRowsLeft);
@@ -990,7 +1166,7 @@ RowVectorPtr Window::getOutput() {
 RowVectorPtr Window::getOutputFromSpilledPartition() {
   RowVectorPtr spilledOutput;
   bool isEnd;
-  if (LIKELY(currentPartition_->getBatch(spilledOutput, isEnd))) {
+  if (LIKELY(partitionState_.partition->getBatch(spilledOutput, isEnd))) {
     auto numOutputRows = spilledOutput->size();
     BOLT_DCHECK(numOutputRows > 0);
     std::vector<VectorPtr> children;
@@ -1003,14 +1179,14 @@ RowVectorPtr Window::getOutputFromSpilledPartition() {
     for (auto w = 0; w < windowResultTypes_.size(); ++w) {
       auto child = BaseVector::create(
           windowResultTypes_[w], numOutputRows, operatorCtx_->pool());
-      currentPartition_->getWindowFunctionResults(
+      partitionState_.partition->getWindowFunctionResults(
           child, numOutputRows, w, windowBuild_->isAggWindowFunc());
       children.emplace_back(std::move(child));
     }
     numProcessedRows_ += numOutputRows;
     if (isEnd) {
       windowBuild_->resetSpiller();
-      callResetPartition();
+      prepareNextPartition();
     }
     return std::make_shared<RowVector>(
         operatorCtx_->pool(),
@@ -1023,7 +1199,7 @@ RowVectorPtr Window::getOutputFromSpilledPartition() {
     // for SpillableWindowBuild, need to set spiller_ to nullptr
     // or needsInput will not consume more data
     windowBuild_->resetSpiller();
-    callResetPartition();
+    prepareNextPartition();
     return nullptr;
   }
 }

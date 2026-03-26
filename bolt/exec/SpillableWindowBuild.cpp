@@ -522,7 +522,7 @@ void SpillableWindowBuild<needSort>::loadNextPartitionFromSpill() {
 }
 
 template <bool needSort>
-std::shared_ptr<WindowPartition>
+std::shared_ptr<WindowPartitionExecReader>
 SpillableWindowBuild<needSort>::nextPartition() {
   BOLT_CHECK_GT(partitionStartRows_.size(), 0, "No window partitions available")
   currentPartition_++;

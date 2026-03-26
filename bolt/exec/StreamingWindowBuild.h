@@ -55,7 +55,7 @@ class StreamingWindowBuild : public WindowBuild {
 
   bool hasNextPartition() override;
 
-  std::shared_ptr<WindowPartition> nextPartition() override;
+  std::shared_ptr<WindowPartitionExecReader> nextPartition() override;
 
   bool needsInput() override {
     // No partitions are available or the currentPartition is the last available

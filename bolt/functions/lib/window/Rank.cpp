@@ -49,7 +49,8 @@ class RankFunction : public exec::WindowFunction {
   explicit RankFunction(const TypePtr& resultType)
       : WindowFunction(resultType, nullptr, nullptr) {}
 
-  void resetPartition(const exec::WindowPartition* partition) override {
+  void resetPartition(
+      const exec::WindowPartitionFunctionReader* partition) override {
     rank_ = 1;
     currentPeerGroupStart_ = 0;
     previousPeerCount_ = 0;

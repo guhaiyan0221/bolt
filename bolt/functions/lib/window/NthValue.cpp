@@ -81,8 +81,12 @@ class NthValueFunction : public exec::WindowFunction {
     nulls_ = allocateNulls(0, pool);
   }
 
-  void resetPartition(const exec::WindowPartition* partition) override {
-    partition_ = partition;
+  void resetPartition(
+      const exec::WindowPartitionFunctionReader* partition) override {
+    partition_ =
+        dynamic_cast<const exec::WindowPartitionFunctionCompatibilityReader*>(
+            partition);
+    BOLT_CHECK_NOT_NULL(partition_);
     partitionOffset_ = 0;
   }
 
@@ -290,7 +294,7 @@ class NthValueFunction : public exec::WindowFunction {
   column_index_t valueIndex_;
   column_index_t offsetIndex_;
 
-  const exec::WindowPartition* partition_;
+  const exec::WindowPartitionFunctionCompatibilityReader* partition_;
 
   // These fields are set if the offset argument is a constant value.
   std::optional<int64_t> constantOffset_;

@@ -94,7 +94,8 @@ class Window : public Operator {
     return noMoreInput_ &&
         (numRows_ == numProcessedRows_ ||
          (windowBuild_->hasOutputAll() &&
-          (!currentPartition_ || !(currentPartition_->buildNextRows()))));
+          (!partitionState_.partition ||
+           !(partitionState_.partition->buildNextRows()))));
   }
 
   bool canReclaim() const override {
@@ -165,8 +166,51 @@ class Window : public Operator {
   // startRow and endRow in the current partition.
   void computePeerAndFrameBuffers(vector_size_t startRow, vector_size_t endRow);
 
-  // Updates all the state for the next partition.
-  void callResetPartition();
+  struct RangeSearchParams {
+    bool firstMatch;
+    int32_t step;
+    int32_t boundaryDirection;
+  };
+
+  const VectorPtr& projectedPartitionColumn(column_index_t columnIndex);
+
+  bool compareRowsWithSortKeys(vector_size_t lhsRow, vector_size_t rhsRow);
+
+  std::pair<vector_size_t, vector_size_t> computePeerBuffers(
+      vector_size_t start,
+      vector_size_t end,
+      vector_size_t prevPeerStart,
+      vector_size_t prevPeerEnd,
+      vector_size_t* rawPeerStarts,
+      vector_size_t* rawPeerEnds);
+
+  vector_size_t searchFrameValue(
+      const RangeSearchParams& params,
+      vector_size_t startRow,
+      column_index_t orderByColumn,
+      column_index_t frameColumn);
+
+  void updateKRangeFrameBounds(
+      const RangeSearchParams& params,
+      column_index_t frameColumn,
+      vector_size_t startRow,
+      vector_size_t numRows,
+      const vector_size_t* rawPeerBuffer,
+      vector_size_t* rawFrameBounds);
+
+  void computeKRangeFrameBounds(
+      bool isStartBound,
+      bool isPreceding,
+      column_index_t frameColumn,
+      vector_size_t startRow,
+      vector_size_t numRows,
+      const vector_size_t* rawPeerBuffer,
+      vector_size_t* rawFrameBounds);
+
+  // Enters the execution prepare phase for the next partition by resetting
+  // execution state, acquiring the next partition reader, and resetting all
+  // window functions against that reader.
+  bool prepareNextPartition();
 
   // Computes the result vector for a subset of the current
   // partition rows starting from startRow to endRow. A single partition
@@ -266,14 +310,38 @@ class Window : public Operator {
   std::unique_ptr<WindowBuild> windowBuild_;
 
   std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
+  std::vector<column_index_t> sortKeyChannels_;
 
   // The cached window plan node used for window function initialization. It is
   // reset after the initialization.
   std::shared_ptr<const core::WindowNode> windowNode_;
 
-  // Used to access window partition rows and columns by the window
-  // operator and functions. This structure is owned by the WindowBuild.
-  std::shared_ptr<WindowPartition> currentPartition_;
+  struct PartitionExecutionState {
+    void reset() {
+      partition = nullptr;
+      partitionOffset = 0;
+      peerStartRow = 0;
+      peerEndRow = 0;
+      projectedColumns.clear();
+    }
+
+    // Reader owned by WindowBuild and prepared for the current execution pass.
+    std::shared_ptr<WindowPartitionExecReader> partition;
+
+    // Tracks how far along the partition rows have been output.
+    vector_size_t partitionOffset = 0;
+
+    // Cached peer range from the prior computePeerBuffers call.
+    vector_size_t peerStartRow = 0;
+    vector_size_t peerEndRow = 0;
+
+    // Lazily projected full-partition columns used by execution-layer peer and
+    // frame computation.
+    std::vector<VectorPtr> projectedColumns;
+  };
+
+  // Explicit execution-layer state for the currently prepared partition.
+  PartitionExecutionState partitionState_;
 
   // Vector of WindowFunction objects required by this operator.
   // WindowFunction is the base API implemented by all the window functions.
@@ -321,20 +389,6 @@ class Window : public Operator {
   // value is updated as the WindowFunction::apply() function is
   // called on the partition blocks.
   vector_size_t numProcessedRows_ = 0;
-
-  // Tracks how far along the partition rows have been output.
-  vector_size_t partitionOffset_ = 0;
-
-  // When traversing input partition rows, the peers are the rows
-  // with the same values for the ORDER BY clause. These rows
-  // are equal in some ways and affect the results of ranking functions.
-  // Since all rows between the peerStartRow_ and peerEndRow_ have the same
-  // values for peerStartRow_ and peerEndRow_, we needn't compute
-  // them for each row independently. Since these rows might
-  // cross getOutput boundaries and be called in subsequent calls to
-  // computePeerBuffers they are saved here.
-  vector_size_t peerStartRow_ = 0;
-  vector_size_t peerEndRow_ = 0;
 
   bool isSpillableWindowBuild_ = false;
   bool isAggWindowFunc_ = false;

@@ -60,7 +60,8 @@ class NtileFunction : public exec::WindowFunction {
     bucketFlatVector_ = bucketVector_->asFlatVector<TResult>();
   }
 
-  void resetPartition(const exec::WindowPartition* partition) override {
+  void resetPartition(
+      const exec::WindowPartitionFunctionReader* partition) override {
     partition_ = partition;
     partitionOffset_ = 0;
     numPartitionRows_ = partition->numRows();
@@ -223,7 +224,7 @@ class NtileFunction : public exec::WindowFunction {
   BucketMetrics fixedBucketMetrics_;
 
   // Current WindowPartition used for accessing rows in the apply method.
-  const exec::WindowPartition* partition_;
+  const exec::WindowPartitionFunctionReader* partition_;
   TResult numPartitionRows_ = 0;
 
   // Denotes how far along the partition rows are output already.

@@ -68,6 +68,18 @@ Reason:
 Instead, when the new feature flag is enabled, the current logical partition is
 owned by a single spillable partition buffer from the beginning.
 
+Clarification:
+
+- the first version must not rely on runtime migration of already-owned
+  partition contents from one source-of-truth storage backend to another during
+  reclaim-triggered transition;
+- this prohibition includes designs that begin with one concrete storage
+  representation for the active partition and then switch to another
+  representation as the source of truth when reclaim fires.
+
+The goal is to avoid placing data migration, ownership transfer, and partial
+state transfer on the reclaim path.
+
 ### 2. Shared partition buffer for both build paths
 
 `StreamingWindowBuild` and `SortWindowBuild` must share one abstraction for
@@ -85,12 +97,27 @@ The large-partition spill behavior is allowed to activate only from reclaim.
 No `window_large_partition_spill_threshold_bytes`-style proactive switch is
 introduced in the first version.
 
+Although other systems may use row-count- or size-based proactive spill
+thresholds for window buffering, this design deliberately does not adopt such
+triggers for large-partition window spill in the first version.
+
 ### 4. Iterator-first read model
 
-The shared partition buffer must expose replay-oriented read APIs:
+The shared partition buffer must expose replay-oriented read APIs, with replay
+iterator access as the primary read contract.
 
-- row iterator from a given offset;
+Primary read capability:
+
+- stable row iterator from a given offset.
+
+Compatibility read capability:
+
 - thin projection over a continuous row interval.
+
+The first version may still need projection-oriented compatibility paths for
+existing window-function implementations, but these are secondary to replay
+access and must not redefine the storage layer into a full-featured
+`WindowPartition` replacement.
 
 It must not become a new full-featured `WindowPartition` replacement with
 strong random column extraction semantics.
@@ -194,9 +221,9 @@ The names below are illustrative; exact naming can follow repository style.
 
 ### Read-side API
 
-The read model is `iterator-first + thin projection`.
+The read model is `iterator-first + compatibility projection`.
 
-Primary APIs:
+Primary replay APIs:
 
 - `iterator(startRow = 0)`
   Create a replay iterator from a row offset.
@@ -207,16 +234,22 @@ Primary APIs:
 - `isSpilled()`
   Report whether the buffer has entered spill-backed mode.
 
-Thin projection API:
+Compatibility projection API:
 
 - `project(columns, startRow, numRows, outputVectors)`
   Project a continuous row interval and a small set of columns.
 
 Constraints:
 
-- The projection is sequential and interval-based.
-- It is not a general sparse row-number extraction API.
-- It does not attempt to preserve the full semantics of the old
+- replay iterator access is the primary storage-facing contract;
+- projection exists to support execution-layer and first-version
+  function-compatibility needs;
+- projection is sequential and interval-based;
+- sparse row-number extraction is not a primary storage API;
+- if first-version compatibility requires row-number-based access for existing
+  window-function implementations, that access should be synthesized in the
+  execution compatibility layer rather than promoted to core storage semantics;
+- this API does not attempt to preserve the full semantics of the old
   `WindowPartition::extractColumn(...)`.
 
 ## Build-Path Integration
@@ -260,6 +293,25 @@ Important separation:
 - partition spill handles oversized logical partitions after ordering;
 - these two state machines must remain conceptually separate.
 
+## Partition Prepare Phase
+
+Before row-by-row output begins for a sealed logical partition, window
+execution enters a prepare phase.
+
+Prepare-phase responsibilities may include:
+
+- creating replay iterators;
+- initializing per-frame or per-function execution helpers;
+- setting replay offsets and reusable projections;
+- precomputing any partition-level state that is cheaper or safer to derive
+  once before output starts.
+
+The first version is allowed to perform full-partition preparation for some
+frame families and function families if that simplifies correctness.
+
+No output rows are produced for a sealed partition until its prepare phase has
+completed.
+
 ## Reclaim Semantics
 
 ### Trigger
@@ -299,10 +351,10 @@ No victim selection logic is required in the first version:
 - in `SortWindowBuild`, sort spill remains separate, and partition spill only
   starts once ordered logical partitions are being materialized.
 
-## `Window.cpp` Execution Changes
+## Window execution-layer changes
 
-The current `Window.cpp` path relies heavily on `WindowPartition` semantics such
-as:
+The current window execution path relies heavily on `WindowPartition`
+semantics such as:
 
 - `extractColumn(...)`
 - `computePeerBuffers(...)`
@@ -310,8 +362,8 @@ as:
 
 The new partition buffer must not absorb these semantics.
 
-Therefore, `Window.cpp` must grow a new consumption path for spillable
-partition-buffer execution.
+Therefore, the window execution layer must grow a new consumption path for
+spillable partition-buffer execution.
 
 ### Execution Model
 
@@ -322,7 +374,7 @@ The new path is based on replay and thin projection:
 - peer and frame calculations are rebuilt in the window execution layer rather
   than delegated to the storage layer.
 
-### Explicit State in `Window.cpp`
+### Explicit State in the execution layer
 
 The new path should explicitly maintain:
 
@@ -342,13 +394,42 @@ The new path should explicitly maintain:
 
 ### Complexity Placement
 
-This design deliberately keeps semantic complexity in `Window.cpp`, not in the
-storage layer. The storage layer stays a replayable partition store.
+This design deliberately keeps semantic complexity in the window execution
+layer, not in the storage layer. The storage layer stays a replayable partition
+store.
+
+The execution layer may use dedicated helpers or executors for different frame
+families if that leads to clearer state management and lower correctness risk in
+the first version.
+
+### First-Version Function Compatibility
+
+The first version may preserve existing window-function implementations behind a
+narrow partition-reader compatibility layer.
+
+This compatibility layer may expose only minimal read capabilities such as:
+
+- row count;
+- replay-oriented access;
+- continuous-range projection;
+- null extraction over continuous ranges.
+
+It must not expose:
+
+- peer computation;
+- frame-bound computation;
+- partition-boundary discovery;
+- execution-state transitions.
+
+The purpose of this layer is to reduce first-version rewrite risk while keeping
+storage semantics narrow.
 
 ### Performance Assumption
 
-The first version is allowed to use multiple sequential scans and replay passes
-for correctness. Avoiding these scans is a later optimization task.
+The first version is allowed to let different frame-family or
+function-compatibility executors use multiple sequential scans and replay
+passes over the same sealed partition for correctness. Avoiding or coalescing
+these scans is a later optimization task.
 
 ## Error Handling
 
@@ -440,11 +521,12 @@ storage and replay model changes.
 
 ## Main Risks
 
-### 1. `Window.cpp` rewrite cost
+### 1. Window execution-layer rewrite cost
 
 The largest implementation cost is not the buffer itself, but building a new
-execution path in `Window.cpp` that no longer depends on strong
-`WindowPartition` storage semantics.
+window execution layer that no longer depends on strong `WindowPartition`
+storage semantics while still preserving correctness across frame families and
+function families.
 
 ### 2. Performance regression
 
@@ -468,9 +550,13 @@ through a `SpillablePartitionBuffer` that:
 
 - owns a logical partition from the start;
 - spills only when reclaim is invoked;
-- supports replay-oriented reading through iterator-first access plus thin
-  projection;
-- leaves window semantics in `Window.cpp` rather than in the storage layer.
+- exposes replay-oriented reading with iterator-first access as the primary
+  read contract, plus thin projection as a compatibility capability;
+- leaves window semantics in the window execution layer rather than in the
+  storage layer;
+- allows the first version to preserve existing window-function
+  implementations behind a narrow compatibility layer without restoring the
+  full old `WindowPartition` semantics.
 
 The design intentionally favors correctness, bounded state complexity, and clear
 ownership over first-version performance.

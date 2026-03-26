@@ -119,7 +119,7 @@ class WindowBuild {
   // the underlying columns of Window partition data.
   // Check hasNextPartition() before invoking this function. This function fails
   // if called when no partition is available.
-  virtual std::shared_ptr<WindowPartition> nextPartition() = 0;
+  virtual std::shared_ptr<WindowPartitionExecReader> nextPartition() = 0;
 
   virtual uint64_t* getloadFromSpillTime() {
     return nullptr;

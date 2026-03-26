@@ -56,8 +56,12 @@ class FirstLastValueFunction : public exec::WindowFunction {
     nulls_ = allocateNulls(0, pool_);
   }
 
-  void resetPartition(const exec::WindowPartition* partition) override {
-    partition_ = partition;
+  void resetPartition(
+      const exec::WindowPartitionFunctionReader* partition) override {
+    partition_ =
+        dynamic_cast<const exec::WindowPartitionFunctionCompatibilityReader*>(
+            partition);
+    BOLT_CHECK_NOT_NULL(partition_);
   }
 
   void apply(
@@ -156,7 +160,7 @@ class FirstLastValueFunction : public exec::WindowFunction {
   // vector. This is used to retrieve column values from the partition data.
   column_index_t valueIndex_;
 
-  const exec::WindowPartition* partition_;
+  const exec::WindowPartitionFunctionCompatibilityReader* partition_;
 
   // The first_value, last_value functions directly write from the input column
   // to the resultVector using the extractColumn API specifying the rowNumber
