@@ -1,5 +1,7 @@
 # Window Large-Partition Spill Design
 
+Chinese version: [2026-03-24-window-large-partition-spill-design.zh-CN.md](/home/guhaiyan/1ws/bolt/docs/superpowers/specs/2026-03-24-window-large-partition-spill-design.zh-CN.md)
+
 ## Background
 
 The current window execution paths can run out of memory when a single logical
