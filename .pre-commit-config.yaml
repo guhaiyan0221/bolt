@@ -79,7 +79,7 @@ repos:
         files: ^doc/blog/_posts/.*\.md$
       - id: markdownlint-blog
         name: Lint and fix blog Markdown
-        entry: npx markdownlint-cli2 --fix "#doc/blog/vendor/**"
+        entry: npx markdownlint-cli2@0.17.2 --fix "#doc/blog/vendor/**"
         language: system
         files: ^doc/blog/.*\.md$
         exclude: ^doc/blog/vendor/

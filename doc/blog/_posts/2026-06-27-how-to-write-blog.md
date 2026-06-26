@@ -98,7 +98,7 @@ Run these commands from the repository root:
 
 ```bash
 python3 scripts/normalize_blog_posts.py --check
-npx markdownlint-cli2 "doc/blog/**/*.md" "#doc/blog/vendor/**"
+npx markdownlint-cli2@0.17.2 "doc/blog/**/*.md" "#doc/blog/vendor/**"
 ```
 
 If the normalize check fails, run:
