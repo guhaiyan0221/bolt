@@ -19,5 +19,10 @@ Bolt has been validated with Spark, Flink, Presto, and OpenSearch, and works wit
 
 ## Where to Go from Here
 
-- [Blog](blog.html)
 - [Bolt on GitHub](https://github.com/guhaiyan0221/bolt)
+
+## Latest Posts
+
+{% for post in site.posts %}
+- [{{ post.title }}]({{ post.url | relative_url }}) — {{ post.date | date: "%Y-%m-%d" }} — {{ post.author | default: site.author }}
+{% endfor %}
