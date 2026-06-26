@@ -1,25 +1,23 @@
 ---
-layout: default
-title: Bolt Blog
+title: Overview
+nav_order: 1
 ---
 
-# Bolt Blog
+# Bolt
 
-欢迎来到 Bolt Blog。
+Bolt is a C++ acceleration library providing a composable, extensible, and high-performance data processing toolkit.
 
-Bolt 是一个 C++ 加速库，提供可组合、可扩展且高性能的数据处理工具集。它面向数据分析系统的物理执行层，目标是在 Spark、Flink、Presto、OpenSearch 等计算框架中，以尽量少的业务代码改动提供统一的高性能执行能力。
+It is designed to provide generic and unified interfaces that can be plugged into any framework, run on any hardware, and consume data from any source.
 
-Bolt 关注多框架、多硬件和多数据源场景下的执行加速能力，支持面向 Parquet、ORC、Text、CSV、Paimon 等存储格式的数据处理，并持续探索在 CPU、DPU、GPU 等不同硬件环境中的性能优化实践。
+## Why Bolt?
 
-这个 Blog 会记录 Bolt 的设计思路、开发实践、性能优化经验、生态集成进展和社区动态。
+Bolt focuses on the physical execution layer of analytical systems and provides first-class support for popular compute frameworks and storage formats.
 
-## 文章列表
+## Ecosystem
 
-{% for post in site.posts %}
-### [{{ post.title }}]({{ post.url | relative_url }})
+Bolt has been validated with Spark, Flink, Presto, and OpenSearch, and works with storage formats such as Parquet, ORC, Text, CSV, Paimon, and Lance.
 
-{{ post.date | date: "%Y-%m-%d" }}
+## Where to Go from Here
 
-{{ post.excerpt | strip_html | truncate: 160 }}
-
-{% endfor %}
+- [Blog](blog.html)
+- [Bolt on GitHub](https://github.com/guhaiyan0221/bolt)
