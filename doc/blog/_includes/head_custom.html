@@ -1,5 +1,5 @@
 <!-- doc/blog/_includes/head_custom.html -->
-<!-- 深色/浅色切换：默认浅色，记忆用户选择 -->
+<!-- Dark/light theme toggle: defaults to light, remembers user choice -->
 <script>
 (function () {
   var KEY = "bolt-theme";
@@ -9,7 +9,7 @@
     }
     document.documentElement.setAttribute("data-bolt-theme", scheme);
   }
-  // 页面加载时恢复上次选择（默认 light）
+  // Restore last choice on load (defaults to light)
   var saved = localStorage.getItem(KEY) || "light";
   document.addEventListener("DOMContentLoaded", function () {
     apply(saved === "dark" ? "bolt-dark" : "bolt");

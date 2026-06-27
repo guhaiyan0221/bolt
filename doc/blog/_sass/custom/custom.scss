@@ -1,12 +1,12 @@
 // doc/blog/_sass/custom/custom.scss
-// Bolt 视觉增强：渐变标题、Hero 区、特性卡片、徽章、按钮
+// Bolt visual enhancements: gradient headings, hero, feature cards, badges, buttons
 
-// ---- 标题加粗收紧字距 ----
+// ---- Tighten heading letter-spacing ----
 .main-content h1, .main-content h2, .main-content h3 {
   letter-spacing: -0.02em;
 }
 
-// ---- 首页 logo 居中、Hero 文案 ----
+// ---- Centered hero logo and lead text ----
 .bolt-hero-logo {
   display: block;
   width: 150px;
@@ -22,7 +22,7 @@
   p { font-size: 1.05rem; color: #6b7280; line-height: 1.7; }
 }
 
-// ---- 主按钮渐变 ----
+// ---- Primary button gradient ----
 .btn-primary {
   background-image: linear-gradient(135deg, #1a6dff, #4d94ff);
   border: none;
@@ -30,7 +30,7 @@
   &:hover { transform: translateY(-1px); }
 }
 
-// ---- 特性卡片（用 Markdown 里的 .bolt-cards 容器）----
+// ---- Feature cards (.bolt-cards container used in Markdown) ----
 .bolt-cards {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -57,7 +57,7 @@
   }
 }
 
-// ---- 技术栈徽章 ----
+// ---- Tech stack badges ----
 .bolt-badges {
   display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.25rem 0;
 
@@ -68,7 +68,7 @@
   }
 }
 
-// ---- 主题切换按钮 ----
+// ---- Theme toggle button ----
 .theme-toggle {
   position: fixed; top: 0.6rem; right: 1rem; z-index: 1000;
   width: 36px; height: 36px; border-radius: 9px;
