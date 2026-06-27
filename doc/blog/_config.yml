@@ -12,7 +12,8 @@ timezone: Asia/Shanghai
 
 # Theme
 theme: just-the-docs
-color_scheme: light
+color_scheme: bolt
+logo: "/assets/images/bolt-nav-logo.png"
 
 # Markdown
 markdown: kramdown

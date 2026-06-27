@@ -1,0 +1,79 @@
+// doc/blog/_sass/custom/custom.scss
+// Bolt 视觉增强：渐变标题、Hero 区、特性卡片、徽章、按钮
+
+// ---- 标题加粗收紧字距 ----
+.main-content h1, .main-content h2, .main-content h3 {
+  letter-spacing: -0.02em;
+}
+
+// ---- 首页 logo 居中、Hero 文案 ----
+.bolt-hero-logo {
+  display: block;
+  width: 150px;
+  margin: 1.5rem auto 1.25rem;
+  filter: drop-shadow(0 8px 22px rgba(26, 109, 255, 0.35));
+}
+
+.bolt-overview-lead {
+  text-align: center;
+  max-width: 620px;
+  margin: 0 auto 1.5rem;
+
+  p { font-size: 1.05rem; color: #6b7280; line-height: 1.7; }
+}
+
+// ---- 主按钮渐变 ----
+.btn-primary {
+  background-image: linear-gradient(135deg, #1a6dff, #4d94ff);
+  border: none;
+  box-shadow: 0 6px 18px rgba(26, 109, 255, 0.3);
+  &:hover { transform: translateY(-1px); }
+}
+
+// ---- 特性卡片（用 Markdown 里的 .bolt-cards 容器）----
+.bolt-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin: 2rem 0;
+
+  @media (max-width: 740px) { grid-template-columns: 1fr; }
+
+  .card {
+    border: 1px solid $border-color;
+    border-radius: 14px;
+    padding: 1.25rem;
+    height: 100%;
+    transition: 0.15s ease;
+
+    &:hover {
+      transform: translateY(-3px);
+      border-color: $link-color;
+      box-shadow: 0 12px 28px rgba(26, 109, 255, 0.12);
+    }
+
+    h3 { margin-top: 0; font-size: 1rem; }
+    p  { font-size: 0.85rem; color: #8b90a0; margin-bottom: 0; }
+  }
+}
+
+// ---- 技术栈徽章 ----
+.bolt-badges {
+  display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.25rem 0;
+
+  span {
+    font-size: 0.78rem; font-weight: 600;
+    padding: 0.3rem 0.75rem; border-radius: 20px;
+    background: rgba(26, 109, 255, 0.1); color: $link-color;
+  }
+}
+
+// ---- 主题切换按钮 ----
+.theme-toggle {
+  position: fixed; top: 0.6rem; right: 1rem; z-index: 1000;
+  width: 36px; height: 36px; border-radius: 9px;
+  border: 1px solid $border-color; background: $body-background-color;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-size: 1rem; line-height: 1;
+  &:hover { border-color: $link-color; }
+}
